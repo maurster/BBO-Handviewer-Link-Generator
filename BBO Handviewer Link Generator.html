@@ -1,0 +1,2696 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bridge Handviewer App</title>
+
+  <!-- Tailwind (for the className styles used in the TSX) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React 18 (UMD) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <!-- Babel (so we can run JSX in one file) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* Small safety net so the app doesn't look broken if Tailwind fails to load */
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+// Function to extract actual card codes from a trick string, ignoring annotations
+  const extractCardCodes = (trickString) => {
+    const cardCodes = [];
+    let i = 0;
+    
+    // Process the string character by character
+    while (i < trickString.length) {
+      // If we have a suit code and a rank code
+      if (i + 1 < trickString.length) {
+        const possibleSuit = trickString[i];
+        const possibleRank = trickString[i+1];
+        
+        // Check if this is a valid suit code (s, h, d, c)
+        if (['s', 'h', 'd', 'c'].includes(possibleSuit)) {
+          // Check if this is a valid rank code (a, k, q, j, t, 9-2)
+          if (['a', 'k', 'q', 'j', 't', '9', '8', '7', '6', '5', '4', '3', '2'].includes(possibleRank.toLowerCase())) {
+            // This is a valid card code (e.g., "sa" for Ace of Spades)
+            cardCodes.push(possibleSuit + possibleRank);
+            i += 2; // Move past the card code
+            
+            // Skip any annotation that might follow
+            if (i < trickString.length && trickString[i] === '{') {
+              while (i < trickString.length && trickString[i] !== '}') {
+                i++;
+              }
+              if (i < trickString.length) i++; // Move past the closing brace
+            }
+            continue; // Continue to the next iteration
+          }
+        }
+      }
+      
+      // If we have an annotation, skip it
+      if (trickString[i] === '{') {
+        while (i < trickString.length && trickString[i] !== '}') {
+          i++;
+        }
+        if (i < trickString.length) i++; // Move past the closing brace
+      } else {
+        // Something else - just move forward
+        i++;
+      }
+    }
+    
+    return cardCodes;
+  };
+
+// React provided via CDN
+const { useState, useEffect } = React;
+
+
+// CardPicker Component
+const CardPicker = ({ hands, setHands, isCardAssigned }) => {
+  const [selectedHand, setSelectedHand] = useState('north');
+  
+  // Define suits and ranks in order
+  const suits = [
+    { name: 'spades', symbol: '♠', code: 's' },
+    { name: 'hearts', symbol: '♥', code: 'h' },
+    { name: 'diamonds', symbol: '♦', code: 'd' },
+    { name: 'clubs', symbol: '♣', code: 'c' }
+  ];
+  
+  const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+  
+  // Function to handle card click
+  const handleCardClick = (suit, rank) => {
+    // Check if card is already assigned
+    if (isCardAssigned(suit, rank)) {
+      // Find which hand has this card and remove it
+      Object.keys(hands).forEach(direction => {
+        if (hands[direction][suit].includes(rank)) {
+          setHands(prev => ({
+            ...prev,
+            [direction]: {
+              ...prev[direction],
+              [suit]: prev[direction][suit].replace(rank, '')
+            }
+          }));
+        }
+      });
+    } else {
+      // Add card to selected hand
+      setHands(prev => ({
+        ...prev,
+        [selectedHand]: {
+          ...prev[selectedHand],
+          [suit]: prev[selectedHand][suit] + rank
+        }
+      }));
+    }
+  };
+  
+  // Function to get assigned hand for a card (for color-coding)
+  const getAssignedHand = (suit, rank) => {
+    const directions = ['north', 'east', 'south', 'west'];
+    for (const direction of directions) {
+      if (hands[direction][suit].includes(rank)) {
+        return direction;
+      }
+    }
+    return null;
+  };
+  
+  // Map directions to colors for visual feedback
+  const directionColors = {
+    'north': 'bg-blue-100 border-blue-300 text-blue-800',
+    'east': 'bg-green-100 border-green-300 text-green-800',
+    'south': 'bg-red-100 border-red-300 text-red-800',
+    'west': 'bg-purple-100 border-purple-300 text-purple-800'
+  };
+  
+  return (
+    <div className="p-3 border border-gray-200 rounded-md mb-4">
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="font-medium text-md">Card Picker</h3>
+        <div className="flex space-x-2">
+          {/* Hand selector buttons */}
+          {['north', 'east', 'south', 'west'].map(direction => (
+            <button
+              key={direction}
+              onClick={() => setSelectedHand(direction)}
+              className={`px-3 py-1 text-sm font-medium rounded-md w-20 text-center ${
+                selectedHand === direction
+                ? `bg-gray-800 text-white`
+                : `bg-gray-100 text-gray-700 hover:bg-gray-200`
+              }`}
+            >
+              {direction.charAt(0).toUpperCase() + direction.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+      
+      {/* Card display by suit */}
+      <div className="space-y-3">
+        {suits.map(suit => (
+          <div key={suit.name} className="mb-3">
+            <div className={`text-lg font-bold mb-1 ${
+              suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'
+            }`}>
+              {suit.symbol} {suit.name.charAt(0).toUpperCase() + suit.name.slice(1)}
+            </div>
+            <div className="flex flex-wrap">
+              {ranks.map(rank => {
+                const assignedHand = getAssignedHand(suit.name, rank);
+                return (
+                  <button
+                    key={`${suit.name}-${rank}`}
+                    onClick={() => handleCardClick(suit.name, rank)}
+                    className={`w-8 h-10 m-1 flex items-center justify-center text-sm font-medium border rounded
+                              ${assignedHand 
+                                ? directionColors[assignedHand]
+                                : `hover:bg-gray-100 border-gray-300 ${
+                                    suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'
+                                  }`
+                              }`}
+                  >
+                    {rank === 'T' ? '10' : rank}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// BridgeDiagram Component
+const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, cardAnnotation, setCardAnnotation }) => {
+  const suits = [
+    { name: 'spades', symbol: '♠', code: 's' },
+    { name: 'hearts', symbol: '♥', code: 'h' },
+    { name: 'diamonds', symbol: '♦', code: 'd' },
+    { name: 'clubs', symbol: '♣', code: 'c' }
+  ];
+  
+  // Function to determine if a card has already been played
+  const isCardPlayed = (suitCode, rankCode) => {
+    const cardCode = `${suitCode}${rankCode.toLowerCase()}`;
+    
+    // Check all tricks to see if this card has been played
+    return playSequence.some(trick => {
+      // Extract just the card codes from the trick string, ignoring annotations
+      const cardCodes = extractCardCodes(trick);
+      return cardCodes.includes(cardCode);
+    });
+  };
+  
+  // Get the current trick number
+  const getCurrentTrickNumber = () => {
+    // Count completed tricks (those with 4 cards)
+    let completedTricks = 0;
+    
+    for (let i = 0; i < playSequence.length; i++) {
+      // Extract actual card codes from the trick string
+      const cardCodes = extractCardCodes(playSequence[i]);
+      
+      // If this trick has 4 cards, it's completed
+      if (cardCodes.length === 4) {
+        completedTricks++;
+      } else if (cardCodes.length > 0) {
+        // If this trick has some cards but not 4, it's the current trick
+        return completedTricks + 1;
+      }
+    }
+    
+    // If all tricks are either empty or complete, the next trick is the current one
+    return completedTricks + 1;
+  };
+  
+  // Function to handle card click
+  const handleCardClick = (suitCode, rankCode) => {
+    // Create the new card code (e.g., "sa" for Ace of Spades)
+    let cardCode = `${suitCode}${rankCode.toLowerCase()}`;
+    
+    // Add annotation if present
+    if (cardAnnotation.trim()) {
+      // Replace spaces with %20 for proper URL encoding
+      const encodedAnnotation = cardAnnotation.replace(/ /g, '%20');
+      cardCode += `{${encodedAnnotation}}`;
+    }
+    
+    // Find the current trick that's being filled
+    // Use extractCardCodes to count actual cards in each trick
+    let trickIndex = 0;
+    
+    while (trickIndex < playSequence.length) {
+      const cardCodes = extractCardCodes(playSequence[trickIndex]);
+      if (cardCodes.length < 4) {
+        // Found a trick that's not full
+        break;
+      }
+      trickIndex++;
+    }
+    
+    if (trickIndex >= 13) {
+      // All tricks are filled
+      return;
+    }
+    
+    // Create a new play sequence array
+    const newPlaySequence = [...playSequence];
+    
+    // Add the card to the current trick
+    newPlaySequence[trickIndex] = (newPlaySequence[trickIndex] || '') + cardCode;
+    
+    // Update the play sequence
+    setPlaySequence(newPlaySequence);
+    
+    // Clear the annotation after using it
+    setCardAnnotation('');
+  };
+  
+  // Get cards in the current trick
+  const getCurrentTrickCards = () => {
+    // Find the current trick
+    for (let i = 0; i < playSequence.length; i++) {
+      // Extract actual card codes from the trick string
+      const cardCodes = extractCardCodes(playSequence[i]);
+      
+      // If this trick has less than 4 cards, it's the current trick
+      if (cardCodes.length < 4 && cardCodes.length > 0) {
+        // Parse the cards in this trick, including their annotations
+        const cards = [];
+        let position = 0;
+        let textPosition = 0;
+        
+        while (textPosition < playSequence[i].length) {
+          // Skip any text that's not a card code
+          if (textPosition + 1 >= playSequence[i].length) break;
+          
+          const suitCode = playSequence[i][textPosition];
+          const rankCode = playSequence[i][textPosition+1];
+          
+          // Check if this is a valid card code
+          if (['s', 'h', 'd', 'c'].includes(suitCode) && 
+              ['a', 'k', 'q', 'j', 't', '9', '8', '7', '6', '5', '4', '3', '2'].includes(rankCode.toLowerCase())) {
+            textPosition += 2; // Move past the card code
+            
+            // Check if there's an annotation
+            let annotation = '';
+            if (textPosition < playSequence[i].length && playSequence[i][textPosition] === '{') {
+              const startIdx = textPosition;
+              while (textPosition < playSequence[i].length && playSequence[i][textPosition] !== '}') {
+                textPosition++;
+              }
+              if (textPosition < playSequence[i].length) {
+                annotation = playSequence[i].substring(startIdx + 1, textPosition);
+                textPosition++; // Move past the closing brace
+              }
+            }
+            
+            // Convert the card codes to symbols
+            let suitSymbol;
+            switch (suitCode) {
+              case 's': suitSymbol = '♠'; break;
+              case 'h': suitSymbol = '♥'; break;
+              case 'd': suitSymbol = '♦'; break;
+              case 'c': suitSymbol = '♣'; break;
+              default: suitSymbol = '?';
+            }
+            
+            let rankSymbol;
+            switch (rankCode.toLowerCase()) {
+              case 'a': rankSymbol = 'A'; break;
+              case 'k': rankSymbol = 'K'; break;
+              case 'q': rankSymbol = 'Q'; break;
+              case 'j': rankSymbol = 'J'; break;
+              case 't': rankSymbol = 'T'; break;
+              default: rankSymbol = rankCode;
+            }
+            
+            cards.push({ 
+              suit: suitSymbol, 
+              rank: rankSymbol,
+              annotation: annotation.replace(/%20/g, ' ') // Convert %20 back to spaces for display
+            });
+            
+            position++;
+          } else {
+            // Not a valid card code, might be part of an annotation or something else
+            // Skip it
+            textPosition++;
+          }
+        }
+        
+        return cards;
+      } else if (cardCodes.length === 0 && i === 0) {
+        // If the first trick is empty
+        return [];
+      }
+    }
+    
+    // If we didn't find a current trick, return an empty array
+    return [];
+  };
+  
+  // Format a hand's cards for display with clickable cards
+  const formatHand = (hand, direction) => {
+    return suits.map(suit => {
+      // Get normalized card ranks for this suit
+      const rawRanks = hand[suit.name];
+      const ranks = rawRanks.replace(/\//g, 'A')
+                          .replace(/\*/g, 'K')
+                          .replace(/-/g, 'Q')
+                          .replace(/\+/g, 'J')
+                          .replace(/1/g, 'T')
+                          .toUpperCase();
+      
+      // Split ranks into individual cards for clicking
+      const cardRanks = ranks.split('');
+      
+      return {
+        suit: suit.symbol,
+        suitCode: suit.code,
+        cardRanks: cardRanks,
+        color: suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'
+      };
+    });
+  };
+  
+  // Format all hands
+  const northHand = formatHand(hands.north, 'north');
+  const eastHand = formatHand(hands.east, 'east');
+  const southHand = formatHand(hands.south, 'south');
+  const westHand = formatHand(hands.west, 'west');
+  
+  const currentTrickNumber = getCurrentTrickNumber();
+  const currentTrickCards = getCurrentTrickCards();
+  const positionNames = ['First', 'Second', 'Third', 'Fourth'];
+  
+  return (
+    <div className="mb-4">
+      {/* Current trick display */}
+      <div className="mb-4">
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="text-sm font-medium">Current Trick: {currentTrickNumber}</h4>
+          <button
+            onClick={onUndoLastCard}
+            disabled={playSequence.every(trick => trick === '')}
+            className={`w-12 h-10 flex items-center justify-center text-sm font-medium border rounded
+                      ${!playSequence.every(trick => trick === '')
+                        ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
+                        : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+          </button>
+        </div>
+        
+        <div className="flex mb-4 min-h-16 border rounded-md bg-gray-50 p-2">
+          {currentTrickCards.length > 0 ? (
+            currentTrickCards.map((card, index) => (
+              <div key={index} className="flex-1 text-center">
+                <div className="text-xs text-gray-500">{positionNames[index]}</div>
+                <div className={`text-lg font-bold flex justify-center items-center ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
+                  <span>{card.suit}</span><span>{card.rank === 'T' ? '10' : card.rank}</span>
+                </div>
+                {card.annotation && (
+                  <div className="text-xs italic text-gray-600 mt-1">"{card.annotation}"</div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="flex items-center justify-center w-full text-gray-500">
+              No cards played in this trick
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Bridge diagram with clickable cards */}
+      <div className="grid grid-cols-3 gap-2">
+        {/* North (top) */}
+        <div className="col-start-2 border border-gray-200 rounded-md p-2 bg-white">
+          <div className="text-center font-medium mb-1 capitalize">North</div>
+          {northHand.map((suitData, index) => (
+            <div key={`north-${suitData.suit}`} className="mb-1">
+              <div className="flex items-center mb-1">
+                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                {suitData.cardRanks.length > 0 ? (
+                  <div className="flex flex-wrap">
+                    {suitData.cardRanks.map((rank, idx) => (
+                      <button
+                        key={`north-${suitData.suitCode}-${rank}-${idx}`}
+                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                      >
+                        {rank === 'T' ? '10' : rank}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-gray-500">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        {/* Empty cell */}
+        <div></div>
+        
+        {/* West (left) and East (right) in the middle row */}
+        <div className="border border-gray-200 rounded-md p-2 bg-white">
+          <div className="text-center font-medium mb-1 capitalize">West</div>
+          {westHand.map((suitData, index) => (
+            <div key={`west-${suitData.suit}`} className="mb-1">
+              <div className="flex items-center mb-1">
+                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                {suitData.cardRanks.length > 0 ? (
+                  <div className="flex flex-wrap">
+                    {suitData.cardRanks.map((rank, idx) => (
+                      <button
+                        key={`west-${suitData.suitCode}-${rank}-${idx}`}
+                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                      >
+                        {rank === 'T' ? '10' : rank}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-gray-500">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        {/* Empty center cell */}
+        <div className="flex items-center justify-center">
+        </div>
+        
+        <div className="border border-gray-200 rounded-md p-2 bg-white">
+          <div className="text-center font-medium mb-1 capitalize">East</div>
+          {eastHand.map((suitData, index) => (
+            <div key={`east-${suitData.suit}`} className="mb-1">
+              <div className="flex items-center mb-1">
+                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                {suitData.cardRanks.length > 0 ? (
+                  <div className="flex flex-wrap">
+                    {suitData.cardRanks.map((rank, idx) => (
+                      <button
+                        key={`east-${suitData.suitCode}-${rank}-${idx}`}
+                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                      >
+                        {rank === 'T' ? '10' : rank}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-gray-500">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        {/* Empty cell */}
+        <div></div>
+        
+        {/* South (bottom) */}
+        <div className="col-start-2 border border-gray-200 rounded-md p-2 bg-white">
+          <div className="text-center font-medium mb-1 capitalize">South</div>
+          {southHand.map((suitData, index) => (
+            <div key={`south-${suitData.suit}`} className="mb-1">
+              <div className="flex items-center mb-1">
+                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                {suitData.cardRanks.length > 0 ? (
+                  <div className="flex flex-wrap">
+                    {suitData.cardRanks.map((rank, idx) => (
+                      <button
+                        key={`south-${suitData.suitCode}-${rank}-${idx}`}
+                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                      >
+                        {rank === 'T' ? '10' : rank}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-gray-500">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      
+      {/* Card Annotation textarea now placed here, after the bridge diagram */}
+      <div className="my-4">
+        <textarea
+          value={cardAnnotation}
+          onChange={(e) => setCardAnnotation(e.target.value)}
+          placeholder="Add annotation for the next played card"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md h-20 resize-y"
+        />
+      </div>
+    </div>
+  );
+};
+
+// Auction Table Component
+const AuctionTable = ({ structuredAuction, dealer }) => {
+  // Format the auction into rows
+  const formatAuctionRows = () => {
+    const positions = ['w', 'n', 'e', 's'];
+    const dealerIndex = positions.indexOf(dealer.toLowerCase());
+    
+    // Start with empty rows and first row with empty cells before dealer
+    let rows = [Array(4).fill('')];
+    let currentRow = 0;
+    let currentPos = 0;
+    
+    // Fill empty cells before dealer
+    for (let i = 0; i < dealerIndex; i++) {
+      rows[currentRow][i] = '-';
+      currentPos++;
+    }
+    
+    // Fill in bids
+    structuredAuction.forEach(bidInfo => {
+      const { bid, alert, annotation } = bidInfo;
+      
+      // Format the bid nicely
+      // Format the bid nicely
+      let displayBid;
+      if (bid === 'p') displayBid = 'Pass';
+      else if (bid === 'd') displayBid = 'X';  // Changed from Dbl to X
+      else if (bid === 'r') displayBid = 'XX'; // Changed from Rdbl to XX
+      else {
+        const level = bid[0];
+        const strain = bid[1];
+        const strainSymbol = 
+          strain === 'c' ? '♣' : 
+          strain === 'd' ? '♦' : 
+          strain === 'h' ? '♥' : 
+          strain === 's' ? '♠' : 'NT';
+        
+        // Create JSX with different colors for strain symbols
+        if (strain === 'd' || strain === 'h') {
+          displayBid = (
+            <span>
+              <span className="text-black">{level}</span>
+              <span className="text-red-600">{strainSymbol}</span>
+            </span>
+          );
+        } else {
+          displayBid = `${level}${strainSymbol}`;
+        }
+      }
+      
+      // Add alert indicator if present
+      if (alert) {
+        displayBid = <span>{displayBid}<span className="text-red-500">*</span></span>;
+      }
+      
+      // Add annotation indicator if present
+      if (annotation) {
+        displayBid = <span>{displayBid}<span className="text-blue-500">†</span></span>;
+      }
+      
+      rows[currentRow][currentPos] = displayBid;
+      
+      // Move to next position
+      currentPos = (currentPos + 1) % 4;
+      
+      // If we wrapped around, create a new row
+      if (currentPos === 0) {
+        rows.push(Array(4).fill(''));
+        currentRow++;
+      }
+    });
+    
+    return rows;
+  };
+  
+  const auctionRows = formatAuctionRows();
+  
+  // Make sure we always display at least one row even if no bids yet
+  const rowsToDisplay = auctionRows.length > 0 ? auctionRows : [Array(4).fill('')];
+  
+  return (
+    <table className="w-full border-collapse table-fixed">
+      <thead>
+        <tr>
+          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">West</th>
+          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">North</th>
+          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">East</th>
+          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">South</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rowsToDisplay.map((row, rowIndex) => (
+          <tr key={`row-${rowIndex}`}>
+            {row.map((cell, cellIndex) => (
+                              <td 
+                key={`cell-${rowIndex}-${cellIndex}`} 
+                className={`px-1 py-1 border text-center ${
+                  cell === 'Pass' ? 'text-gray-500' : 
+                  cell === 'X' ? 'text-red-600 font-medium' : 
+                  cell === 'XX' ? 'text-blue-600 font-medium' : 
+                  'text-black' // Default to black for all other cells
+                }`}
+              >
+                {cell}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+};
+
+// Bidding Box Component
+const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, alertMessage, setAlertMessage, bidAnnotation, setBidAnnotation }) => {
+  // Define possible bids
+  const levels = [1, 2, 3, 4, 5, 6, 7];
+  const suits = [
+    { name: 'clubs', symbol: '♣', code: 'c' },
+    { name: 'diamonds', symbol: '♦', code: 'd' },
+    { name: 'hearts', symbol: '♥', code: 'h' },
+    { name: 'spades', symbol: '♠', code: 's' },
+    { name: 'no trump', symbol: 'NT', code: 'n' }
+  ];
+  
+  // Check if the auction is over (3 consecutive passes after a bid)
+  const isAuctionOver = () => {
+    // If less than 4 bids, auction can't be over
+    if (currentAuction.length < 4) return false;
+    
+    // Get last 3 bids
+    const lastThreeBids = currentAuction.slice(-3);
+    
+    // Check if they're all passes
+    return lastThreeBids.every(bid => bid.bid === 'p') && 
+           // Make sure there's at least one non-pass bid before them
+           currentAuction.some(bid => bid.bid !== 'p');
+  };
+  
+  // Calculate who is next to bid
+  const getNextToAct = () => {
+    const positions = ['w', 'n', 'e', 's'];
+    const dealerIndex = positions.indexOf(dealer.toLowerCase());
+    
+    // If no bids yet, dealer starts
+    if (currentAuction.length === 0) {
+      return positions[dealerIndex];
+    }
+    
+    // Otherwise, next position after last bidder
+    const lastBidderIndex = positions.indexOf(currentAuction[currentAuction.length - 1].direction);
+    return positions[(lastBidderIndex + 1) % 4];
+  };
+  
+  // Determine if a bid is legal
+  const isLegalBid = (bidCode) => {
+    // If auction is over (3 consecutive passes after a bid), no more bids allowed
+    if (isAuctionOver()) return false;
+    
+    const nextToAct = getNextToAct();
+    
+    // Special case for pass - always legal
+    if (bidCode === 'p') return true;
+    
+    // For double
+    if (bidCode === 'd') {
+      // Can only double opponent's contract
+      if (currentAuction.length === 0) return false;
+      
+      // Find the last normal bid (not pass, double, or redouble)
+      const lastNormalBid = currentAuction.slice().reverse().find(bid => 
+        bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+      );
+      
+      if (!lastNormalBid) return false;
+      
+      // Determine if the last normal bid was made by an opponent
+      const currentPair = nextToAct === 'n' || nextToAct === 's' ? ['n', 's'] : ['e', 'w'];
+      const isOpponentBid = !currentPair.includes(lastNormalBid.direction);
+      
+      // Check if there's already a double or redouble in effect for the current contract
+      const reversedAuction = currentAuction.slice().reverse();
+      const lastNormalBidIndex = reversedAuction.findIndex(bid => 
+        bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+      );
+      
+      // Extract all bids after the last normal bid
+      const bidsAfterLastNormal = reversedAuction.slice(0, lastNormalBidIndex);
+      const alreadyDoubled = bidsAfterLastNormal.some(bid => bid.bid === 'd');
+      const alreadyRedoubled = bidsAfterLastNormal.some(bid => bid.bid === 'r');
+      
+      // Can double if it's an opponent's bid and not already doubled or redoubled
+      return isOpponentBid && !alreadyDoubled && !alreadyRedoubled;
+    }
+    
+    // For redouble
+    if (bidCode === 'r') {
+      // Can only redouble if there's a double in effect
+      const reversedAuction = currentAuction.slice().reverse();
+      
+      // Find the last normal bid first
+      const lastNormalBidIndex = reversedAuction.findIndex(bid => 
+        bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+      );
+      
+      if (lastNormalBidIndex === -1) return false;
+      
+      // Get the direction of the last normal bid
+      const lastNormalBidDirection = reversedAuction[lastNormalBidIndex].direction;
+      
+      // Determine if we're on the same side as the last normal bid
+      const currentPair = nextToAct === 'n' || nextToAct === 's' ? ['n', 's'] : ['e', 'w'];
+      const isSameSideAsLastBid = currentPair.includes(lastNormalBidDirection);
+      
+      // Extract all bids after the last normal bid
+      const bidsAfterLastNormal = reversedAuction.slice(0, lastNormalBidIndex);
+      const isDoubled = bidsAfterLastNormal.some(bid => bid.bid === 'd');
+      const alreadyRedoubled = bidsAfterLastNormal.some(bid => bid.bid === 'r');
+      
+      // Can redouble if our side's bid was doubled and not already redoubled
+      return isSameSideAsLastBid && isDoubled && !alreadyRedoubled;
+    }
+    
+    // For normal bids, check if it's higher than the previous bid
+    if (currentAuction.length > 0) {
+      const lastNormalBid = currentAuction.slice().reverse().find(bid => 
+        bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+      );
+      
+      if (lastNormalBid) {
+        // Parse bid to get level and strain
+        const [level, strain] = [parseInt(bidCode[0]), bidCode[1]];
+        const [lastLevel, lastStrain] = [parseInt(lastNormalBid.bid[0]), lastNormalBid.bid[1]];
+        
+        // Strain ranking: c < d < h < s < n
+        const strainRank = { c: 1, d: 2, h: 3, s: 4, n: 5 };
+        
+        // Check if current bid is higher
+        if (level < lastLevel) return false;
+        if (level === lastLevel && strainRank[strain] <= strainRank[lastStrain]) return false;
+      }
+    }
+    
+    return true;
+  };
+  
+  return (
+    <div className="mb-4">
+      {/* Bid buttons - one row per level */}
+      {levels.map(level => (
+        <div key={`level-${level}`} className="flex mb-1">
+          {suits.map(suit => (
+            <button
+              key={`${level}${suit.code}`}
+              onClick={() => onBidSelected(`${level}${suit.code}`)}
+              disabled={!isLegalBid(`${level}${suit.code}`)}
+              className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                         ${isLegalBid(`${level}${suit.code}`) 
+                           ? 'hover:bg-blue-100 border-gray-300' 
+                           : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <span className="text-black">{level}</span><span className={suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'}>{suit.symbol}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+      
+      {/* Action buttons below level 7 in a separate row */}
+      <div className="flex mt-2">
+        <button
+          onClick={() => onBidSelected('p')}
+          disabled={!isLegalBid('p')}
+          className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                    ${isLegalBid('p') 
+                      ? 'hover:bg-blue-100 border-gray-300' 
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+        >
+          Pass
+        </button>
+        
+        <button
+          onClick={() => onBidSelected('d')}
+          disabled={!isLegalBid('d')}
+          className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                    ${isLegalBid('d') 
+                      ? 'hover:bg-red-100 border-gray-300 text-red-600' 
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+        >
+          X
+        </button>
+        
+        <button
+          onClick={() => onBidSelected('r')}
+          disabled={!isLegalBid('r')}
+          className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                    ${isLegalBid('r') 
+                      ? 'hover:bg-blue-100 border-gray-300 text-blue-600' 
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+        >
+          XX
+        </button>
+        
+        {/* Empty div to take up space for the fourth column */}
+        <div className="w-12 h-10 mx-1"></div>
+        
+        {/* Undo button in 5th column, aligned with NT */}
+        <button
+          onClick={onUndoLastBid}
+          disabled={currentAuction.length === 0}
+          className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                    ${currentAuction.length > 0
+                      ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Alert input with precise alignment */}
+      <div className="flex items-center mt-3">
+        {/* Label aligned with Pass button */}
+        <div className="w-12 mx-1 text-center">
+          <label className="block text-sm font-medium text-gray-700">Alert</label>
+        </div>
+        {/* Textbox aligned from X button to end of 7NT */}
+        <div style={{ width: "224px" }}> {/* Exactly 4 buttons × (48px width + 8px margins) */}
+          <input
+            type="text"
+            value={alertMessage}
+            onChange={(e) => setAlertMessage(e.target.value)}
+            placeholder="Explain bid here"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+        </div>
+      </div>
+      
+      {/* Annotation input */}
+      <div className="flex items-center mt-3">
+        {/* Align annotation textarea with alert input */}
+        <div className="w-12 mx-1"> 
+          {/* Empty div for spacing */}
+        </div>
+        <div style={{ width: "224px" }}> {/* Match the width of alert input */}
+          <textarea
+            value={bidAnnotation}
+            onChange={(e) => setBidAnnotation(e.target.value)}
+            placeholder="Add annotation here"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md h-20 resize-y"
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const BridgeHandviewerApp = () => {
+  // State for all inputs
+  const [hands, setHands] = useState({
+    north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+    east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+    south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+    west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+  });
+  
+  const [names, setNames] = useState({
+    north: '',
+    south: '',
+    east: '',
+    west: ''
+  });
+  
+  const [dealer, setDealer] = useState('n');
+  const [vulnerability, setVulnerability] = useState('-');
+  const [boardNumber, setBoardNumber] = useState('');
+  const [kibitzer, setKibitzer] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [auction, setAuction] = useState('');
+  const [structuredAuction, setStructuredAuction] = useState([]);
+  const [showBiddingBox, setShowBiddingBox] = useState(false);
+  const [showBridgeDiagram, setShowBridgeDiagram] = useState(false); // State for bridge diagram
+  const [showCardPicker, setShowCardPicker] = useState(false); // State for card picker
+  const [alertMessage, setAlertMessage] = useState('');
+  const [bidAnnotation, setBidAnnotation] = useState(''); // New state for bid annotation
+  const [cardAnnotation, setCardAnnotation] = useState(''); // New state for card annotation
+  const [playSequence, setPlaySequence] = useState(Array(13).fill(''));
+  const [claimedTricks, setClaimedTricks] = useState('');
+  const [generatedUrl, setGeneratedUrl] = useState('');
+  const [error, setError] = useState('');
+  // Initialize separate copied state for different copy buttons
+  const [urlCopied, setUrlCopied] = useState(false);
+  const [embedCopied, setEmbedCopied] = useState(false);
+  const [importUrl, setImportUrl] = useState('');
+  const [showImport, setShowImport] = useState(false);
+
+  // Define ranks array for use in multiple places
+  const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+
+  // Define suits for use in multiple places
+  const suits = [
+    { name: 'spades', symbol: '♠', code: 's' },
+    { name: 'hearts', symbol: '♥', code: 'h' },
+    { name: 'diamonds', symbol: '♦', code: 'd' },
+    { name: 'clubs', symbol: '♣', code: 'c' }
+  ];
+
+  // Function to parse LIN format from BBO handviewer URLs
+  const parseLINFormat = (linString) => {
+    try {
+      // Split by pipe character
+      const parts = linString.split('|');
+      
+      const result = {
+        hands: {
+          north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+        },
+        names: { north: '', east: '', south: '', west: '' },
+        dealer: 'n',
+        vulnerability: '-',
+        boardNumber: '',
+        auction: '',
+        playSequence: Array(13).fill('')
+      };
+      
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        
+        // Player names (pn)
+        if (part === 'pn' && i + 1 < parts.length) {
+          const names = parts[i + 1].split(',');
+          if (names.length === 4) {
+            result.names.south = decodeURIComponent(names[0]);
+            result.names.west = decodeURIComponent(names[1]);
+            result.names.north = decodeURIComponent(names[2]);
+            result.names.east = decodeURIComponent(names[3]);
+          }
+        }
+        
+        // Dealer (md)
+        if (part === 'md' && i + 1 < parts.length) {
+          const handData = parts[i + 1];
+          // First character is dealer position (1=S, 2=W, 3=N, 4=E)
+          const dealerNum = handData.charAt(0);
+          const dealerMap = { '1': 's', '2': 'w', '3': 'n', '4': 'e' };
+          result.dealer = dealerMap[dealerNum] || 'n';
+          
+          // Parse hands - format is like: 3SQT54HQ954DCKJ754,SK97HK732DK83CQT6,SJ632HJ6D9742CA98,SA8HAT8DAQJT65C32
+          // The first number indicates the dealer (1=S, 2=W, 3=N, 4=E)
+          // The hands are ALWAYS in the order: South, West, North, East
+          const handsData = handData.substring(1).split(',');
+          const positions = ['south', 'west', 'north', 'east'];
+          
+          handsData.forEach((handStr, idx) => {
+            const position = positions[idx];
+            let currentSuit = '';
+            
+            for (let j = 0; j < handStr.length; j++) {
+              const char = handStr[j].toUpperCase();
+              if (char === 'S') currentSuit = 'spades';
+              else if (char === 'H') currentSuit = 'hearts';
+              else if (char === 'D') currentSuit = 'diamonds';
+              else if (char === 'C') currentSuit = 'clubs';
+              else if (currentSuit) {
+                result.hands[position][currentSuit] += char;
+              }
+            }
+          });
+        }
+        
+        // Vulnerability (sv)
+        if (part === 'sv' && i + 1 < parts.length) {
+          const vulStr = parts[i + 1];
+          const vulMap = { 'o': '-', 'n': 'n', 'e': 'e', 'b': 'b' };
+          result.vulnerability = vulMap[vulStr] || '-';
+        }
+        
+        // Board number (ah - often contains "Board X")
+        if (part === 'ah' && i + 1 < parts.length) {
+          const boardText = parts[i + 1];
+          const match = boardText.match(/Board\s+(\d+)/i);
+          if (match) {
+            result.boardNumber = match[1];
+          }
+        }
+        
+        // Auction (mb = make bid, an = annotation)
+        if (part === 'mb') {
+          let auctionParts = [];
+          let j = i + 1;
+
+          // In LIN, auction tokens can appear before play tokens.
+          // Parse the whole mb/an run, but DO NOT stop the loop here.
+          while (j < parts.length && (parts[j - 1] === 'mb' || parts[j - 1] === 'an')) {
+            if (parts[j - 1] === 'mb') {
+              const bid = (parts[j] || '').toLowerCase();
+
+              // Convert BBO format to our format
+              let convertedBid = bid;
+              if (bid === 'p') convertedBid = 'p';
+              else if (bid === 'd') convertedBid = 'd';
+              else if (bid === 'r') convertedBid = 'r';
+              else if (bid.match(/^\d[cdhsn]$/i)) convertedBid = bid.toLowerCase();
+
+              // Optional alert/annotation in LIN uses 'an'
+              if (j + 1 < parts.length && parts[j + 1] === 'an') {
+                const annotation = decodeURIComponent(parts[j + 2] || '').replace(/ /g, '%20');
+                convertedBid += `(${annotation})`;
+                j += 2; // Skip the 'an' and annotation text
+              }
+
+              auctionParts.push(convertedBid);
+            }
+            j += 2;
+          }
+
+          result.auction = auctionParts.join('');
+
+          // Skip over consumed tokens so we don't re-scan them
+          i = j - 2;
+          continue;
+        }
+
+// Claim (mc = make claim)
+        if (part === 'mc') {
+          const claimed = parts[i + 1];
+          if (claimed !== undefined && claimed !== null && claimed !== '') {
+            result.claimedTricks = String(claimed);
+          }
+          continue;
+        }
+
+// Play sequence (pc = play card)
+        if (part === 'pc') {
+          let playCards = [];
+          let j = i + 1;
+
+          while (j < parts.length && parts[j - 1] === 'pc') {
+            const raw = parts[j] || '';
+            const card = raw.toLowerCase();
+
+            // Convert card format (e.g., "DA" or "C5") -> "da" / "c5"
+            if (card.length === 2) {
+              const suit = card[0].toLowerCase();
+              const rank = card[1].toLowerCase();
+              playCards.push(`${suit}${rank}`);
+            }
+            j += 2;
+          }
+
+          // Group into tricks of 4 cards
+          const tricks = [];
+          for (let k = 0; k < playCards.length; k += 4) {
+            tricks.push(playCards.slice(k, k + 4).join(''));
+          }
+
+          // Fill the play sequence array
+          for (let k = 0; k < Math.min(tricks.length, 13); k++) {
+            result.playSequence[k] = tricks[k];
+          }
+
+          // Skip over consumed tokens so we don't re-scan them
+          i = j - 2;
+          continue;
+        }
+
+      }
+      
+      return result;
+    } catch (err) {
+      throw new Error(`Failed to parse LIN format: ${err.message}`);
+    }
+  };
+
+  // Function to parse handviewer URL format
+  const parseHandviewerUrl = (url) => {
+    try {
+      // Extract query string
+      let queryString = '';
+      if (url.includes('?')) {
+        queryString = url.split('?')[1];
+      } else {
+        queryString = url;
+      }
+      
+      const params = new URLSearchParams(queryString);
+      
+      const result = {
+        hands: {
+          north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+        },
+        names: { north: '', east: '', south: '', west: '' },
+        dealer: 'n',
+        vulnerability: '-',
+        boardNumber: '',
+        auction: '',
+        playSequence: Array(13).fill('')
+      };
+      
+      // Parse hands (n, e, s, w parameters)
+      const parseHand = (handString) => {
+        const hand = { spades: '', hearts: '', diamonds: '', clubs: '' };
+        if (!handString) return hand;
+        
+        let currentSuit = '';
+        for (let i = 0; i < handString.length; i++) {
+          const char = handString[i];
+          if (char === 's') currentSuit = 'spades';
+          else if (char === 'h') currentSuit = 'hearts';
+          else if (char === 'd') currentSuit = 'diamonds';
+          else if (char === 'c') currentSuit = 'clubs';
+          else if (currentSuit) {
+            hand[currentSuit] += char.toUpperCase();
+          }
+        }
+        return hand;
+      };
+      
+      if (params.has('n')) result.hands.north = parseHand(params.get('n'));
+      if (params.has('e')) result.hands.east = parseHand(params.get('e'));
+      if (params.has('s')) result.hands.south = parseHand(params.get('s'));
+      if (params.has('w')) result.hands.west = parseHand(params.get('w'));
+      
+      // Parse names
+      if (params.has('nn')) result.names.north = decodeURIComponent(params.get('nn'));
+      if (params.has('en')) result.names.east = decodeURIComponent(params.get('en'));
+      if (params.has('sn')) result.names.south = decodeURIComponent(params.get('sn'));
+      if (params.has('wn')) result.names.west = decodeURIComponent(params.get('wn'));
+      
+      // Parse dealer
+      if (params.has('d')) result.dealer = params.get('d').toLowerCase();
+      
+      // Parse vulnerability
+      if (params.has('v')) result.vulnerability = params.get('v');
+      
+      // Parse board number
+      if (params.has('b')) result.boardNumber = params.get('b');
+      
+      // Parse auction
+      if (params.has('a')) result.auction = params.get('a');
+      
+      // Parse play sequence
+      if (params.has('p')) {
+        const playString = params.get('p');
+        // Group into tricks of 4 cards
+        const tricks = [];
+        for (let i = 0; i < playString.length; i += 8) {
+          const trick = playString.substring(i, i + 8);
+          if (trick.length >= 2) {
+            tricks.push(trick);
+          }
+        }
+        
+        // Fill the play sequence array
+        for (let i = 0; i < Math.min(tricks.length, 13); i++) {
+          result.playSequence[i] = tricks[i];
+        }
+      }
+      
+      return result;
+    } catch (err) {
+      throw new Error(`Failed to parse handviewer URL: ${err.message}`);
+    }
+  };
+
+  // Function to import from URL
+  const handleImportUrl = () => {
+    try {
+      setError('');
+      
+      let urlToParse = importUrl.trim();
+      let parsed;
+      
+      // Check if it's a LIN format URL or a handviewer URL
+      if (urlToParse.includes('lin=')) {
+        // Extract the lin parameter
+        const linMatch = urlToParse.match(/lin=([^&]*)/);
+        if (linMatch) {
+          const linParam = decodeURIComponent(linMatch[1]);
+          parsed = parseLINFormat(linParam);
+        } else {
+          setError('Could not find LIN data in URL');
+          return;
+        }
+      } else if (urlToParse.includes('bridgebase.com/tools/handviewer.html') || 
+                 urlToParse.includes('n=') || urlToParse.includes('s=') || 
+                 urlToParse.includes('e=') || urlToParse.includes('w=')) {
+        // It's a handviewer URL format
+        parsed = parseHandviewerUrl(urlToParse);
+      } else {
+        // Try to parse as LIN format directly
+        try {
+          parsed = parseLINFormat(urlToParse);
+        } catch {
+          // If that fails, try handviewer format
+          parsed = parseHandviewerUrl(urlToParse);
+        }
+      }
+      
+      // Update all state
+      setHands(parsed.hands);
+      setNames(parsed.names);
+      setDealer(parsed.dealer);
+      setVulnerability(parsed.vulnerability);
+      setBoardNumber(parsed.boardNumber);
+      setAuction(parsed.auction);
+      setPlaySequence(parsed.playSequence);
+      setClaimedTricks(parsed.claimedTricks || '');
+      
+      // Parse auction into structured format
+      if (parsed.auction) {
+        const positions = ['w', 'n', 'e', 's'];
+        const dealerIndex = positions.indexOf(parsed.dealer.toLowerCase());
+        const newStructuredAuction = [];
+        let currentIndex = dealerIndex;
+        
+        const regex = /([1-7][cdhsn]|p|d|r)(?:\(([^)]*)\))?(?:\{([^}]*)\})?/g;
+        let match;
+        
+        while ((match = regex.exec(parsed.auction)) !== null) {
+          const [_, bid, alert, annotation] = match;
+          
+          newStructuredAuction.push({
+            direction: positions[currentIndex],
+            bid: bid,
+            alert: alert ? alert.replace(/%20/g, ' ') : '',
+            annotation: annotation || ''
+          });
+          
+          currentIndex = (currentIndex + 1) % 4;
+        }
+        
+        setStructuredAuction(newStructuredAuction);
+      }
+      
+      setImportUrl('');
+      setShowImport(false);
+      
+    } catch (err) {
+      setError(`Import failed: ${err.message}`);
+    }
+  };
+
+  // Function to check if a card is already assigned to any hand
+  const isCardAssigned = (suit, rank) => {
+    return Object.values(hands).some(hand => 
+      hand[suit].includes(rank === 'T' ? 'T' : rank)
+    );
+  };
+  
+  // Function to assign 13 random cards to a hand
+  const assignRandomCards = (direction) => {
+    // Get all unassigned cards
+    const unassignedCards = [];
+    suits.forEach(suit => {
+      ranks.forEach(rank => {
+        if (!isCardAssigned(suit.name, rank)) {
+          unassignedCards.push({suit: suit.name, rank});
+        }
+      });
+    });
+    
+    // If not enough cards, show error
+    if (unassignedCards.length < 13) {
+      setError(`Not enough unassigned cards (${unassignedCards.length} available)`);
+      return;
+    }
+    
+    // Shuffle and pick 13
+    const shuffled = [...unassignedCards].sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, 13);
+    
+    // Reset the hand
+    const newHand = {
+      spades: '',
+      hearts: '',
+      diamonds: '',
+      clubs: ''
+    };
+    
+    // Add cards to the hand
+    selected.forEach(card => {
+      newHand[card.suit] += card.rank;
+    });
+    
+    // Sort cards in each suit
+    Object.keys(newHand).forEach(suit => {
+      newHand[suit] = sortCardRanks(newHand[suit]);
+    });
+    
+    // Update hand
+    setHands(prev => ({
+      ...prev,
+      [direction]: newHand
+    }));
+  };
+  
+  // Function to assign remaining cards to a hand
+  const assignRemainingCards = (direction) => {
+    // Get all unassigned cards
+    const unassignedCards = [];
+    suits.forEach(suit => {
+      ranks.forEach(rank => {
+        if (!isCardAssigned(suit.name, rank)) {
+          unassignedCards.push({suit: suit.name, rank});
+        }
+      });
+    });
+    
+    // If no cards, show message
+    if (unassignedCards.length === 0) {
+      setError("No unassigned cards available");
+      return;
+    }
+    
+    // Create the new hand starting with existing cards
+    const newHand = {
+      spades: hands[direction].spades,
+      hearts: hands[direction].hearts,
+      diamonds: hands[direction].diamonds,
+      clubs: hands[direction].clubs
+    };
+    
+    // Add cards to the hand
+    unassignedCards.forEach(card => {
+      newHand[card.suit] += card.rank;
+    });
+    
+    // Sort cards in each suit
+    Object.keys(newHand).forEach(suit => {
+      newHand[suit] = sortCardRanks(newHand[suit]);
+    });
+    
+    // Update hand
+    setHands(prev => ({
+      ...prev,
+      [direction]: newHand
+    }));
+  };
+
+  // Function to sort card ranks from highest to lowest
+  const sortCardRanks = (ranks) => {
+    if (!ranks) return '';
+    
+    // Define the order of card ranks (highest to lowest)
+    const rankOrder = {'A': 0, 'K': 1, 'Q': 2, 'J': 3, 'T': 4, '9': 5, '8': 6, '7': 7, '6': 8, '5': 9, '4': 10, '3': 11, '2': 12};
+    
+    // Convert string to array of characters, sort them, and join back to string
+    return ranks.split('').sort((a, b) => rankOrder[a] - rankOrder[b]).join('');
+  };
+
+  // Function to validate card ranks
+  const validateRanks = (ranks) => {
+    if (!ranks) return true; // Empty is valid
+    
+    // Replace alternative symbols with standard ones
+    const cleanRanks = ranks.replace(/\s+/g, '')
+                           .replace(/\//g, 'A')
+                           .replace(/\*/g, 'K')
+                           .replace(/-/g, 'Q')
+                           .replace(/\+/g, 'J')
+                           .replace(/1/g, 'T')
+                           .toUpperCase();
+    
+    const validChars = /^[2-9AKQJT0-9X]*$/i;
+    return validChars.test(cleanRanks);
+  };
+
+  // Function to normalize card ranks (replace symbols with letters)
+  const normalizeRanks = (ranks) => {
+    if (!ranks) return '';
+    
+    return ranks.replace(/\//g, 'A')
+               .replace(/\*/g, 'K')
+               .replace(/-/g, 'Q')
+               .replace(/\+/g, 'J')
+               .replace(/1/g, 'T')
+               .toUpperCase();
+  };
+
+  // Function to format the hand for the URL
+  const formatHand = (handObj) => {
+    const { spades, hearts, diamonds, clubs } = handObj;
+    
+    // Convert to lowercase for URL and normalize symbols
+    const s = normalizeRanks(spades);
+    const h = normalizeRanks(hearts);
+    const d = normalizeRanks(diamonds);
+    const c = normalizeRanks(clubs);
+    
+    // Only return if at least one suit has cards
+    if (s || h || d || c) {
+      return `s${s}h${h}d${d}c${c}`.toLowerCase();
+    }
+    return '';
+  };
+
+  // Process annotations in curly braces and encode spaces
+  const processAnnotations = (text) => {
+    if (!text) return '';
+    
+    // Use regex to find all annotations in curly braces and replace spaces with %20
+    let processed = text.replace(/\{([^}]*)\}/g, (match, content) => {
+      return '{' + content.replace(/ /g, '%20') + '}';
+    });
+    
+    // Also process alerts in parentheses
+    processed = processed.replace(/\(([^)]*)\)/g, (match, content) => {
+      return '(' + content.replace(/ /g, '%20') + ')';
+    });
+    
+    return processed;
+  };
+
+  // Handle bid selection from bidding box
+  const handleBidSelected = (bid) => {
+    // Get next player to act
+    const positions = ['w', 'n', 'e', 's'];
+    const dealerIndex = positions.indexOf(dealer.toLowerCase());
+    let nextPlayerIndex;
+    
+    if (structuredAuction.length === 0) {
+      nextPlayerIndex = dealerIndex;
+    } else {
+      const lastBidderIndex = positions.indexOf(structuredAuction[structuredAuction.length - 1].direction);
+      nextPlayerIndex = (lastBidderIndex + 1) % 4;
+    }
+    
+    const nextPlayer = positions[nextPlayerIndex];
+    
+    // Update structured auction with bid, alert, and annotation if present
+    const newStructuredAuction = [
+      ...structuredAuction,
+      { 
+        direction: nextPlayer, 
+        bid, 
+        alert: alertMessage || '',  // Ensure alert is never undefined
+        annotation: bidAnnotation || '' // Add annotation
+      }
+    ];
+    
+    setStructuredAuction(newStructuredAuction);
+    
+    // Update compact auction format
+    // Include alert in parentheses and annotation in curly braces if present
+    const compactAuction = newStructuredAuction.map(item => {
+      let result = item.bid;
+      if (item.alert) {
+        result += `(${item.alert})`;
+      }
+      if (item.annotation) {
+        result += `{${item.annotation}}`;
+      }
+      return result;
+    }).join('');
+    
+    setAuction(compactAuction);
+    
+    // Clear alert and annotation after using them
+    setAlertMessage('');
+    setBidAnnotation('');
+  };
+
+  // Update structured auction when compact auction changes manually
+  useEffect(() => {
+    if (auction && structuredAuction.length > 0) {
+      const compactAuction = structuredAuction.map(item => {
+        let result = item.bid;
+        if (item.alert) {
+          result += `(${item.alert})`;
+        }
+        if (item.annotation) {
+          result += `{${item.annotation}}`;
+        }
+        return result;
+      }).join('');
+      
+      if (compactAuction !== auction) {
+        // This means the user manually edited the auction input
+        const positions = ['w', 'n', 'e', 's'];
+        const dealerIndex = positions.indexOf(dealer.toLowerCase());
+        
+        // Parse the compact auction into structured format
+        const newStructuredAuction = [];
+        let currentIndex = dealerIndex;
+        
+        // Complex regex to match bids with potential alerts in parentheses and annotations in curly braces
+        const regex = /([1-7][cdhsn]|p|d|r)(?:\(([^)]*)\))?(?:\{([^}]*)\})?/g;
+        let match;
+        let auctionCopy = auction;
+        
+        while ((match = regex.exec(auctionCopy)) !== null) {
+          const [_, bid, alert, annotation] = match;
+          
+          newStructuredAuction.push({
+            direction: positions[currentIndex],
+            bid: bid,
+            alert: alert || '',
+            annotation: annotation || ''
+          });
+          
+          currentIndex = (currentIndex + 1) % 4;
+        }
+        
+        setStructuredAuction(newStructuredAuction);
+      }
+    }
+  }, [auction, dealer]);
+
+  // Generate the URL when inputs change
+  useEffect(() => {
+    try {
+      let url = 'https://www.bridgebase.com/tools/handviewer.html?';
+      const params = [];
+      
+      // Add hands
+      const northHand = formatHand(hands.north);
+      const eastHand = formatHand(hands.east);
+      const southHand = formatHand(hands.south);
+      const westHand = formatHand(hands.west);
+      
+      if (northHand) params.push(`n=${northHand}`);
+      if (eastHand) params.push(`e=${eastHand}`);
+      if (southHand) params.push(`s=${southHand}`);
+      if (westHand) params.push(`w=${westHand}`);
+      
+      // Add names
+      if (names.north) params.push(`nn=${encodeURIComponent(names.north)}`);
+      if (names.east) params.push(`en=${encodeURIComponent(names.east)}`);
+      if (names.south) params.push(`sn=${encodeURIComponent(names.south)}`);
+      if (names.west) params.push(`wn=${encodeURIComponent(names.west)}`);
+      
+      // Add other parameters (only if they have values)
+      if (dealer) params.push(`d=${dealer}`);
+      if (vulnerability !== '-') params.push(`v=${vulnerability}`);
+      if (boardNumber) params.push(`b=${boardNumber}`);
+      if (kibitzer) params.push(`k=${kibitzer}`);
+      
+      // Process auction with annotations
+      if (auction) {
+        const processedAuction = processAnnotations(auction);
+        params.push(`a=${processedAuction}`);
+      }
+      
+      // Combine play sequence from all tricks and process annotations
+      const fullPlaySequence = playSequence.join('');
+      if (fullPlaySequence) {
+        // Ensure spaces in annotations are properly converted to %20
+        const processedPlaySequence = processAnnotations(fullPlaySequence);
+        params.push(`p=${processedPlaySequence}`);
+      }
+      
+      // Add claimed tricks if specified
+      if (claimedTricks) params.push(`c=${claimedTricks}`);
+      
+      // Combine parameters
+      url += params.join('&');
+      setGeneratedUrl(url);
+      setError('');
+    } catch (err) {
+      setError('Error generating URL: ' + err.message);
+    }
+  }, [hands, names, dealer, vulnerability, boardNumber, kibitzer, auction, playSequence, claimedTricks]);
+
+  // Handle hand input change
+  const handleHandChange = (direction, suit, value) => {
+    setHands(prev => ({
+      ...prev,
+      [direction]: {
+        ...prev[direction],
+        [suit]: value // Keep original value in the input field
+      }
+    }));
+  };
+
+  // Handle name input change
+  const handleNameChange = (direction, value) => {
+    setNames(prev => ({ ...prev, [direction]: value }));
+  };
+
+  // Handle play sequence change for a specific trick
+  const handlePlaySequenceChange = (trickIndex, value) => {
+    const newPlaySequence = [...playSequence];
+    newPlaySequence[trickIndex] = value;
+    setPlaySequence(newPlaySequence);
+  };
+
+  // Handle auction input change manually
+  const handleAuctionChange = (e) => {
+    setAuction(e.target.value);
+  };
+
+  // Handle undoing the last bid
+  const handleUndoLastBid = () => {
+    if (structuredAuction.length > 0) {
+      const newStructuredAuction = [...structuredAuction];
+      newStructuredAuction.pop();
+      setStructuredAuction(newStructuredAuction);
+      
+      // Update compact auction format
+      const compactAuction = newStructuredAuction.map(item => {
+        let result = item.bid;
+        if (item.alert) {
+          result += `(${item.alert})`;
+        }
+        if (item.annotation) {
+          result += `{${item.annotation}}`;
+        }
+        return result;
+      }).join('');
+      
+      setAuction(compactAuction);
+      
+      // Also clear any pending alert and annotation message
+      setAlertMessage('');
+      setBidAnnotation('');
+    }
+  };
+
+  // Handle undoing the last card played
+  const handleUndoLastCard = () => {
+    // Find the last trick with cards
+    let lastTrickIndex = -1;
+    
+    // Search backwards to find the last trick with at least one card
+    for (let i = playSequence.length - 1; i >= 0; i--) {
+      const cardCodes = extractCardCodes(playSequence[i]);
+      if (cardCodes.length > 0) {
+        lastTrickIndex = i;
+        break;
+      }
+    }
+    
+    if (lastTrickIndex < 0) {
+      return; // No cards to undo
+    }
+    
+    const newPlaySequence = [...playSequence];
+    const trick = newPlaySequence[lastTrickIndex];
+    
+    // Find the last card and any annotation that might follow it
+    let i = 0;
+    let lastCardStartPos = -1;
+    let lastCardEndPos = -1;
+    
+    while (i < trick.length) {
+      if (i + 1 < trick.length) {
+        const possibleSuit = trick[i];
+        const possibleRank = trick[i+1];
+        
+        // Check if this is a valid card
+        if (['s', 'h', 'd', 'c'].includes(possibleSuit) && 
+            ['a', 'k', 'q', 'j', 't', '9', '8', '7', '6', '5', '4', '3', '2'].includes(possibleRank.toLowerCase())) {
+          lastCardStartPos = i;
+          lastCardEndPos = i + 2; // Just past the card code
+          
+          // Check for annotation
+          if (lastCardEndPos < trick.length && trick[lastCardEndPos] === '{') {
+            // Card has an annotation - find the end of it
+            let j = lastCardEndPos;
+            while (j < trick.length && trick[j] !== '}') {
+              j++;
+            }
+            if (j < trick.length) lastCardEndPos = j + 1; // Include the closing brace
+          }
+          
+          // Move past the card (and annotation if present)
+          i = lastCardEndPos;
+        } else {
+          // Not a valid card, move forward
+          i++;
+        }
+      } else {
+        i++;
+      }
+    }
+    
+    // If we found a card to remove
+    if (lastCardStartPos >= 0) {
+      // Remove the card and its annotation
+      newPlaySequence[lastTrickIndex] = trick.substring(0, lastCardStartPos);
+      setPlaySequence(newPlaySequence);
+    }
+  };
+
+  // Toggle bridge diagram visibility
+  const toggleBridgeDiagram = () => {
+    setShowBridgeDiagram(!showBridgeDiagram);
+  };
+  
+  // Toggle card picker visibility
+  const toggleCardPicker = () => {
+    setShowCardPicker(!showCardPicker);
+  };
+
+  // Copy URL to clipboard
+  const copyToClipboard = () => {
+    try {
+      // Create a temporary textarea element
+      const textarea = document.createElement('textarea');
+      textarea.value = generatedUrl;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      
+      // Select the text and copy it
+      textarea.select();
+      document.execCommand('copy');
+      
+      // Remove the textarea
+      document.body.removeChild(textarea);
+      
+      // Show feedback
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 2000);
+    } catch (err) {
+      setError(`Failed to copy: ${err.message}`);
+    }
+  };
+
+  // Reset all inputs
+  const resetForm = () => {
+    setHands({
+      north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+    });
+    setDealer('n');
+    setVulnerability('-');
+    setBoardNumber('');
+    setNames({
+      north: '',
+      south: '',
+      east: '',
+      west: ''
+    });
+    setKibitzer('');
+    setAuction('');
+    setStructuredAuction([]);
+    setPlaySequence(Array(13).fill(''));
+    setClaimedTricks('');
+    setAlertMessage('');
+    setBidAnnotation('');
+    setCardAnnotation('');
+  };
+  
+  // Generate a random deal
+  const generateRandomDeal = () => {
+    // Create a deck of 52 cards
+    const deck = [];
+    
+    // Build the deck
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        deck.push({ suit: suit.name, rank });
+      }
+    }
+    
+    // Shuffle the deck using Fisher-Yates algorithm
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    
+    // Deal cards to players
+    const players = ['north', 'east', 'south', 'west'];
+    const playerHands = {
+      north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+      west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+    };
+    
+    // Deal 13 cards to each player
+    for (let i = 0; i < deck.length; i++) {
+      const player = players[Math.floor(i / 13)];
+      const { suit, rank } = deck[i];
+      playerHands[player][suit] += rank;
+    }
+    
+    // Sort each suit from highest to lowest
+    for (const player of players) {
+      for (const suit of suits.map(s => s.name)) {
+        playerHands[player][suit] = sortCardRanks(playerHands[player][suit]);
+      }
+    }
+    
+    // Set the hands
+    setHands(playerHands);
+    
+    // Randomly set dealer
+    const dealerOptions = ['n', 'e', 's', 'w'];
+    setDealer(dealerOptions[Math.floor(Math.random() * 4)]);
+    
+    // Randomly set vulnerability
+    const vulOptions = ['-', 'n', 'e', 'b'];
+    setVulnerability(vulOptions[Math.floor(Math.random() * 4)]);
+    
+    // Set a random board number between 1 and 36
+    setBoardNumber(Math.floor(Math.random() * 36) + 1);
+  };
+
+  // Toggle help section
+  const toggleHelp = () => {
+    setShowHelp(!showHelp);
+  };
+
+  // Clear auction
+  const clearAuction = () => {
+    setAuction('');
+    setStructuredAuction([]);
+  };
+
+  // Toggle bidding box
+  const toggleBiddingBox = () => {
+    setShowBiddingBox(!showBiddingBox);
+  };
+
+  // Generate PBN format
+  const generatePBN = () => {
+    try {
+      let pbn = '';
+      
+      // Add PBN version indicator
+      pbn += '% PBN 2.1\n';
+      pbn += '% EXPORT\n';
+      
+      // Event tag (use board number if available)
+      pbn += `[Event "${boardNumber ? `Board ${boardNumber}` : ''}"]\n`;
+      
+      // Site tag
+      pbn += '[Site ""]\n';
+      
+      // Date tag (use current date in PBN format: YYYY.MM.DD)
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
+      pbn += `[Date "${year}.${month}.${day}"]\n`;
+      
+      // Board tag
+      pbn += `[Board "${boardNumber || ''}"]\n`;
+      
+      // Player name tags
+      pbn += `[West "${names.west || ''}"]\n`;
+      pbn += `[North "${names.north || ''}"]\n`;
+      pbn += `[East "${names.east || ''}"]\n`;
+      pbn += `[South "${names.south || ''}"]\n`;
+      
+      // Dealer tag
+      pbn += `[Dealer "${dealer.toUpperCase()}"]\n`;
+      
+      // Vulnerable tag
+      let vulValue = '';
+      switch (vulnerability) {
+        case '-': vulValue = 'None'; break;
+        case 'n': vulValue = 'NS'; break;
+        case 'e': vulValue = 'EW'; break;
+        case 'b': vulValue = 'All'; break;
+        default: vulValue = 'None';
+      }
+      pbn += `[Vulnerable "${vulValue}"]\n`;
+      
+      // Deal tag - format: "N:SAK.HQJ.D.C AKQ.HJT.D.C ..."
+      const formatPBNHand = (hand) => {
+        const suits = ['spades', 'hearts', 'diamonds', 'clubs'];
+        return suits.map(suit => {
+          const cards = normalizeRanks(hand[suit]).toUpperCase();
+          return cards || '';
+        }).join('.');
+      };
+      
+      const dealParts = [
+        formatPBNHand(hands.north),
+        formatPBNHand(hands.east),
+        formatPBNHand(hands.south),
+        formatPBNHand(hands.west)
+      ];
+      
+      // Start with dealer
+      const dealerIndex = ['n', 'e', 's', 'w'].indexOf(dealer.toLowerCase());
+      const orderedDeals = [
+        ...dealParts.slice(dealerIndex),
+        ...dealParts.slice(0, dealerIndex)
+      ];
+      
+      pbn += `[Deal "${dealer.toUpperCase()}:${orderedDeals.join(' ')}"]\n`;
+      
+      // Scoring tag
+      pbn += '[Scoring ""]\n';
+      
+      // Declarer tag
+      let declarerValue = '';
+      if (structuredAuction.length > 0) {
+        // Find the last non-pass bid to determine declarer
+        const lastBid = structuredAuction.slice().reverse().find(bid => 
+          bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+        );
+        if (lastBid) {
+          // Find the first player on this side to bid this strain
+          const strain = lastBid.bid[1];
+          const side = lastBid.direction === 'n' || lastBid.direction === 's' ? ['n', 's'] : ['e', 'w'];
+          const firstBidder = structuredAuction.find(bid => 
+            bid.bid.length >= 2 && bid.bid[1] === strain && side.includes(bid.direction)
+          );
+          if (firstBidder) {
+            declarerValue = firstBidder.direction.toUpperCase();
+          }
+        }
+      }
+      pbn += `[Declarer "${declarerValue}"]\n`;
+      
+      // Contract tag
+      let contractValue = '';
+      if (structuredAuction.length > 0) {
+        // Check if all passed
+        const allPassed = structuredAuction.every(bid => bid.bid === 'p');
+        if (allPassed) {
+          contractValue = 'Pass';
+        } else {
+          // Find the last non-pass bid
+          const lastBid = structuredAuction.slice().reverse().find(bid => 
+            bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
+          );
+          if (lastBid) {
+            let contract = lastBid.bid.toUpperCase();
+            
+            // Check for doubles/redoubles after this bid
+            const lastBidIndex = structuredAuction.lastIndexOf(lastBid);
+            const afterBids = structuredAuction.slice(lastBidIndex + 1);
+            
+            let doubled = false;
+            let redoubled = false;
+            for (const bid of afterBids) {
+              if (bid.bid === 'd') doubled = true;
+              if (bid.bid === 'r') redoubled = true;
+              if (bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r') {
+                doubled = false;
+                redoubled = false;
+              }
+            }
+            
+            if (redoubled) contract += 'XX';
+            else if (doubled) contract += 'X';
+            
+            contractValue = contract;
+          }
+        }
+      }
+      pbn += `[Contract "${contractValue}"]\n`;
+      
+      // Result tag
+      pbn += '[Result ""]\n';
+      
+      // Add auction section if present
+      if (structuredAuction.length > 0) {
+        pbn += `[Auction "${dealer.toUpperCase()}"]\n`;
+        
+        // Group bids by 4
+        let auctionLine = '';
+        let bidCount = 0;
+        
+        for (const bidInfo of structuredAuction) {
+          let bidText = bidInfo.bid.toUpperCase();
+          if (bidInfo.bid === 'p') bidText = 'Pass';
+          
+          // Add alert as note if present
+          if (bidInfo.alert) {
+            bidText += ` =${bidCount + 1}=`;
+          }
+          
+          auctionLine += bidText;
+          bidCount++;
+          
+          if (bidCount % 4 === 0) {
+            pbn += auctionLine + '\n';
+            auctionLine = '';
+          } else {
+            auctionLine += '\t';
+          }
+        }
+        
+        if (auctionLine.trim()) {
+          pbn += auctionLine.trim() + '\n';
+        }
+        
+        // Add note explanations
+        let noteIndex = 1;
+        for (const bidInfo of structuredAuction) {
+          if (bidInfo.alert) {
+            pbn += `[Note "${noteIndex}:${bidInfo.alert}"]\n`;
+            noteIndex++;
+          }
+        }
+      }
+      
+      // Add play section if present
+      const hasPlay = playSequence.some(trick => trick !== '');
+      if (hasPlay) {
+        // Determine opening leader (declarer's left hand opponent)
+        let leader = '';
+        if (declarerValue) {
+          const positions = ['w', 'n', 'e', 's'];
+          const declarerIdx = positions.indexOf(declarerValue.toLowerCase());
+          leader = positions[(declarerIdx + 1) % 4].toUpperCase();
+        }
+        
+        if (leader) {
+          pbn += `[Play "${leader}"]\n`;
+          
+          // Format play sequence
+          for (const trick of playSequence) {
+            if (trick) {
+              // Extract cards from trick (ignoring annotations for now)
+              const cards = extractCardCodes(trick);
+              const playLine = cards.map(card => card.toUpperCase()).join('\t');
+              if (playLine) {
+                pbn += playLine + '\n';
+              }
+            }
+          }
+        }
+      }
+      
+      pbn += '\n';
+      
+      return pbn;
+    } catch (err) {
+      setError(`Failed to generate PBN: ${err.message}`);
+      return '';
+    }
+  };
+
+  // Download PBN file
+  const downloadPBN = () => {
+    try {
+      const pbnContent = generatePBN();
+      if (!pbnContent) return;
+      
+      const blob = new Blob([pbnContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `board${boardNumber || 'deal'}.pbn`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(`Failed to download PBN: ${err.message}`);
+    }
+  };
+
+  // Directions in the correct order: North, East, South, West
+  const directions = ['north', 'east', 'south', 'west'];
+
+  return (
+    <div className="p-4 bg-gray-50 min-h-screen">
+      <div className="max-w-4xl mx-auto bg-white rounded-lg shadow">
+        <div className="p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-xl font-bold text-gray-800">BBO Handviewer Link Generator</h1>
+            <div className="flex space-x-2">
+              <button
+                onClick={toggleHelp}
+                className="h-8 w-8 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200"
+                aria-label="Information"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowImport(!showImport)}
+                className="px-3 py-1 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition"
+                title="Import from BBO/Intobridge URL"
+              >
+                Import
+              </button>
+              <button
+                onClick={generateRandomDeal}
+                className="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition"
+                title="Generate random hands"
+              >
+                Random
+              </button>
+              <button
+                onClick={resetForm}
+                className="px-3 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 transition"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+          
+          {showImport && (
+            <div className="mb-4 bg-purple-50 p-3 rounded-md">
+              <h3 className="text-md font-medium text-purple-800 mb-2">Import from BBO/Intobridge</h3>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={importUrl}
+                  onChange={(e) => setImportUrl(e.target.value)}
+                  placeholder="https://www.bridgebase.com/tools/handviewer.html?lin=..."
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                />
+                <button
+                  onClick={handleImportUrl}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition"
+                >
+                  Import
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {showHelp && (
+            <div className="mb-4 bg-blue-50 p-3 rounded-md">
+              <h3 className="text-md font-medium text-blue-800 mb-2">How to Use</h3>
+              <ol className="list-decimal pl-5 text-sm text-gray-700 space-y-1">
+                <li>Enter the cards for each suit using standard notation (A, K, Q, J, T, 9, 8, 7, 6, 5, 4, 3, 2) or alternative symbols (/, *, -, +, 1 for A, K, Q, J, 10), or use the card picker to add cards by clicking</li>
+                <li>Set the dealer, vulnerability and other options as needed</li>
+                <li>You can use the bidding box to enter an auction by clicking on the bids, or type directly in the auction field</li>
+                <li>Add bid annotations in the Annotation textarea before making a bid</li>
+                <li>You can use the bridge diagram to enter card plays by clicking on the cards, or type directly in the play sequence fields</li>
+                <li>Add card annotations in the Card Annotation textarea before playing a card</li>
+                <li>The URL will be generated automatically as you type</li>
+              </ol>
+            </div>
+          )}
+          
+          {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">{error}</div>}
+          
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-3">Hands</h3>
+              
+              <div className="mb-3">
+                <button
+                  onClick={toggleCardPicker}
+                  className="text-blue-600 hover:text-blue-800 text-sm flex items-center mb-3"
+                >
+                  {showCardPicker ? 'Hide' : 'Show'} Cards
+                  <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    className={`h-4 w-4 ml-1 transition-transform ${showCardPicker ? 'rotate-180' : ''}`} 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                
+                {showCardPicker && (
+                  <CardPicker
+                    hands={hands}
+                    setHands={setHands}
+                    isCardAssigned={isCardAssigned}
+                  />
+                )}
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {directions.map(direction => (
+                  <div key={direction} className="p-3 border border-gray-200 rounded-md">
+                    <div className="flex justify-between items-center mb-2">
+                      <h3 className="font-medium capitalize text-md">{direction}</h3>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => assignRandomCards(direction)}
+                          className="text-gray-500 hover:text-green-600"
+                          title={`Assign 13 random cards to ${direction}`}
+                          tabIndex={-1}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                        
+                        <button
+                          onClick={() => assignRemainingCards(direction)}
+                          className="text-gray-500 hover:text-blue-600"
+                          title={`Assign remaining cards to ${direction}`}
+                          tabIndex={-1}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 11l7-7 7 7M5 19l7-7 7 7" />
+                          </svg>
+                        </button>
+                        
+                        <button
+                          onClick={() => {
+                            setHands(prev => ({
+                              ...prev,
+                              [direction]: { spades: '', hearts: '', diamonds: '', clubs: '' }
+                            }));
+                          }}
+                          className="text-gray-500 hover:text-red-600"
+                          title={`Clear ${direction}'s hand`}
+                          tabIndex={-1}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-row space-x-2">
+                      {suits.map(suit => (
+                        <div key={`${direction}-${suit.name}`} className="flex items-center flex-1">
+                          <span className={`text-lg font-bold mr-1 w-4 text-center ${
+                            suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'
+                          }`}>
+                            {suit.symbol}
+                          </span>
+                          <input
+                            type="text"
+                            value={hands[direction][suit.name]}
+                            onChange={(e) => handleHandChange(direction, suit.name, e.target.value)}
+                            className={`w-full block px-2 py-1 rounded-md border ${
+                              validateRanks(hands[direction][suit.name]) ? 'border-gray-300' : 'border-red-500'
+                            }`}
+                            placeholder=""
+                          />
+                          {!validateRanks(hands[direction][suit.name]) && 
+                            <p className="ml-1 text-xs text-red-600">
+                              !
+                            </p>
+                          }
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <div className="mb-3">
+                <h2 className="text-lg font-semibold mb-2">Board Information</h2>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Dealer</label>
+                    <select
+                      value={dealer}
+                      onChange={(e) => {
+                        setDealer(e.target.value);
+                        // Reset auction when dealer changes
+                        setAuction('');
+                        setStructuredAuction([]);
+                      }}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="n">North</option>
+                      <option value="e">East</option>
+                      <option value="s">South</option>
+                      <option value="w">West</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Vulnerability</label>
+                    <select
+                      value={vulnerability}
+                      onChange={(e) => setVulnerability(e.target.value)}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="-">None</option>
+                      <option value="n">N-S</option>
+                      <option value="e">E-W</option>
+                      <option value="b">Both</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Board Number</label>
+                    <input
+                      type="number"
+                      value={boardNumber}
+                      onChange={(e) => setBoardNumber(e.target.value)}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Board number (optional)"
+                    />
+                  </div>
+                  
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-sm font-medium text-gray-700">Auction</label>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={toggleBiddingBox}
+                          className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                        >
+                          {showBiddingBox ? 'Hide' : 'Show'} Bidding Box
+                          <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            className={`h-4 w-4 ml-1 transition-transform ${showBiddingBox ? 'rotate-180' : ''}`} 
+                            fill="none" 
+                            viewBox="0 0 24 24" 
+                            stroke="currentColor"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={clearAuction}
+                          className="text-gray-500 hover:text-red-600"
+                          title="Clear auction"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-600 mb-1">Format: 1sp3ndrppp</p>
+                    <input
+                      type="text"
+                      value={auction}
+                      onChange={handleAuctionChange}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Bidding sequence"
+                    />
+                  </div>
+                </div>
+                
+                {showBiddingBox && (
+                  <div className="mt-3 p-3 border border-gray-200 rounded-md">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gridGap: '1rem' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gridGap: '1rem' }}>
+                        {/* Bidding box in left column */}
+                        <div>
+                          <h4 className="text-sm font-medium mb-2">Bidding Box</h4>
+                          <BiddingBox
+                            onBidSelected={handleBidSelected}
+                            currentAuction={structuredAuction}
+                            dealer={dealer}
+                            onUndoLastBid={handleUndoLastBid}
+                            alertMessage={alertMessage}
+                            setAlertMessage={setAlertMessage}
+                            bidAnnotation={bidAnnotation}
+                            setBidAnnotation={setBidAnnotation}
+                          />
+                        </div>
+                        
+                        {/* Auction table in right column */}
+                        <div>
+                          <h4 className="text-sm font-medium mb-2">Auction</h4>
+                          <AuctionTable
+                            structuredAuction={structuredAuction}
+                            dealer={dealer}
+                          />
+                          <div className="mt-2 text-sm">
+                            <span className="text-red-500">*</span> = Alert &nbsp;
+                            <span className="text-blue-500">†</span> = Annotation
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="text-blue-600 hover:text-blue-800 font-medium flex items-center"
+              >
+                {showAdvanced ? 'Hide' : 'Show'} More Options
+                <svg 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  className={`h-5 w-5 ml-1 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} 
+                  fill="none" 
+                  viewBox="0 0 24 24" 
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          {showAdvanced && (
+            <div className="mt-4 p-4 border border-gray-200 rounded-md bg-gray-50">
+              <h2 className="text-lg font-semibold mb-3">More Options</h2>
+              
+              <div className="grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Kibitzer View</label>
+                  <select
+                    value={kibitzer}
+                    onChange={(e) => setKibitzer(e.target.value)}
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">All hands visible</option>
+                    <option value="n">North</option>
+                    <option value="e">East</option>
+                    <option value="s">South</option>
+                    <option value="w">West</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <h3 className="text-md font-medium mb-2">Player Names</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {directions.map(direction => (
+                      <div key={`name-${direction}`} className="mb-2">
+                        <label className="block text-sm font-medium text-gray-700 capitalize mb-1">{direction}'s Name</label>
+                        <input
+                          type="text"
+                          value={names[direction]}
+                          onChange={(e) => handleNameChange(direction, e.target.value)}
+                          className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                          placeholder={`${direction}'s name`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <h3 className="text-md font-medium">Play Sequence</h3>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={toggleBridgeDiagram}
+                        className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                      >
+                        {showBridgeDiagram ? 'Hide' : 'Show'} Bridge Diagram
+                        <svg 
+                          xmlns="http://www.w3.org/2000/svg" 
+                          className={`h-4 w-4 ml-1 transition-transform ${showBridgeDiagram ? 'rotate-180' : ''}`} 
+                          fill="none" 
+                          viewBox="0 0 24 24" 
+                          stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => setPlaySequence(Array(13).fill(''))}
+                        className="text-gray-500 hover:text-red-600"
+                        title="Clear all play sequence"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-600 mb-2">Format for each trick: sjsqsksa</p>
+                  
+                  {showBridgeDiagram && (
+                    <div className="mt-3 p-3 border border-gray-200 rounded-md mb-4">
+                      <BridgeDiagram
+                        hands={hands}
+                        playSequence={playSequence}
+                        setPlaySequence={setPlaySequence}
+                        onUndoLastCard={handleUndoLastCard}
+                        cardAnnotation={cardAnnotation}
+                        setCardAnnotation={setCardAnnotation}
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {Array.from({ length: 13 }).map((_, index) => (
+                      <div key={`trick-${index}`} className="flex items-center">
+                        <label className="block text-sm font-medium text-gray-700 mr-2 w-16">Trick {index + 1}:</label>
+                        <input
+                          type="text"
+                          value={playSequence[index]}
+                          onChange={(e) => handlePlaySequenceChange(index, e.target.value)}
+                          className="block w-full px-2 py-1 border border-gray-300 rounded-md"
+                          placeholder=""
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Number of Tricks Claimed</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="13"
+                    value={claimedTricks}
+                    onChange={(e) => setClaimedTricks(e.target.value)}
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="0-13"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <div className="mt-6">
+            <div className="mb-4">
+              <label className="block text-lg font-medium text-gray-900 mb-2">Handviewer URL</label>
+              <div className="flex rounded-md shadow-sm">
+                <input
+                  type="text"
+                  readOnly
+                  value={generatedUrl}
+                  className="flex-1 block w-full px-3 py-2 rounded-l-md rounded-r-md border border-gray-300 bg-gray-50 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={copyToClipboard}
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-r-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  style={{ marginLeft: '-1px' }}
+                >
+                  {urlCopied ? (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-lg font-medium text-gray-900 mb-2">Bridge Winners Embed Code</label>
+              <div className="flex rounded-md shadow-sm">
+                <input
+                  type="text"
+                  readOnly
+                  value={`{handviewer ${generatedUrl.split('?')[1]}}`}
+                  className="flex-1 block w-full px-3 py-2 rounded-l-md rounded-r-md border border-gray-300 bg-gray-50 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`{handviewer ${generatedUrl.split('?')[1]}}`);
+                    setEmbedCopied(true);
+                    setTimeout(() => setEmbedCopied(false), 2000);
+                  }}
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-r-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  style={{ marginLeft: '-1px' }}
+                >
+                  {embedCopied ? (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <button
+                onClick={downloadPBN}
+                className="w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 transition font-medium flex items-center justify-center"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download as PBN
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<BridgeHandviewerApp />);
+  </script>
+</body>
+</html>
