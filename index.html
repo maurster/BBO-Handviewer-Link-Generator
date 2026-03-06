@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bridge Handviewer App</title>
+  <title>BBO Handviewer Link Generator</title>
 
   <!-- Tailwind (for the className styles used in the TSX) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -89,32 +89,37 @@ const CardPicker = ({ hands, setHands, isCardAssigned }) => {
   
   const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
   
+  // Helpers to keep cards sorted (A K Q J T 9 ... 2)
+  const rankOrder = ['A','K','Q','J','T','9','8','7','6','5','4','3','2'];
+  const sortRanks = (str) => {
+    if (!str) return '';
+    const uniq = Array.from(new Set(str.toUpperCase().split('').filter(Boolean)));
+    uniq.sort((a,b) => rankOrder.indexOf(a) - rankOrder.indexOf(b));
+    return uniq.join('');
+  };
+
   // Function to handle card click
   const handleCardClick = (suit, rank) => {
-    // Check if card is already assigned
-    if (isCardAssigned(suit, rank)) {
-      // Find which hand has this card and remove it
-      Object.keys(hands).forEach(direction => {
-        if (hands[direction][suit].includes(rank)) {
-          setHands(prev => ({
-            ...prev,
-            [direction]: {
-              ...prev[direction],
-              [suit]: prev[direction][suit].replace(rank, '')
-            }
-          }));
+    setHands(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+
+      // If card is already assigned, remove it from whichever hand has it
+      if (isCardAssigned(suit, rank)) {
+        for (const direction of Object.keys(next)) {
+          const s = (next[direction][suit] || '');
+          if (s.includes(rank)) {
+            next[direction][suit] = sortRanks(s.replace(rank, ''));
+            break;
+          }
         }
-      });
-    } else {
-      // Add card to selected hand
-      setHands(prev => ({
-        ...prev,
-        [selectedHand]: {
-          ...prev[selectedHand],
-          [suit]: prev[selectedHand][suit] + rank
-        }
-      }));
-    }
+        return next;
+      }
+
+      // Otherwise add to selected hand (and keep sorted)
+      const current = (next[selectedHand][suit] || '');
+      next[selectedHand][suit] = sortRanks(current + rank);
+      return next;
+    });
   };
   
   // Function to get assigned hand for a card (for color-coding)
@@ -195,13 +200,23 @@ const CardPicker = ({ hands, setHands, isCardAssigned }) => {
 };
 
 // BridgeDiagram Component
-const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, cardAnnotation, setCardAnnotation }) => {
+const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoLastCard, cardAnnotation, setCardAnnotation, currentToAct, displayTrickLeader, displayTrickIndex, boardNumber, dealer, vulnerability, structuredAuction, contractDisplay, nsTricks, ewTricks, onRedoLastCard, canRedoLastCard, onClearPlayRedo }) => {
   const suits = [
     { name: 'spades', symbol: '♠', code: 's' },
     { name: 'hearts', symbol: '♥', code: 'h' },
     { name: 'diamonds', symbol: '♦', code: 'd' },
     { name: 'clubs', symbol: '♣', code: 'c' }
   ];
+
+  const getVulLabel = (v) => {
+    const x = (v || '').toString().toLowerCase();
+    if (x === '-' || x === 'o' || x === 'none' || x === 'love') return 'None';
+    if (x === 'n' || x === 'ns') return 'NS';
+    if (x === 'e' || x === 'ew') return 'EW';
+    if (x === 'b' || x === 'all' || x === 'both') return 'Both';
+    return v || 'None';
+  };
+
   
   // Function to determine if a card has already been played
   const isCardPlayed = (suitCode, rankCode) => {
@@ -215,6 +230,166 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
     });
   };
   
+
+
+  // --- Drag & drop swap (between hands) ---
+  const suitCodeToName = { s: 'spades', h: 'hearts', d: 'diamonds', c: 'clubs' };
+  const rankToAlt = { A: '/', K: '*', Q: '-', J: '+', T: '1' };
+
+  const removeRankOnce = (str, rankChar) => {
+    if (!str) return '';
+    // Try normal rank first, then alternate symbol (/,*, -, +, 1)
+    if (str.includes(rankChar)) return str.replace(rankChar, '');
+    const alt = rankToAlt[rankChar];
+    if (alt && str.includes(alt)) return str.replace(alt, '');
+    return str; // nothing removed
+  };
+
+  const addRank = (str, rankChar) => (str || '') + rankChar;
+
+  const altToRank = { '/': 'A', '*': 'K', '-': 'Q', '+': 'J', '1': 'T' };
+  const rankOrder = ['A','K','Q','J','T','9','8','7','6','5','4','3','2'];
+  const toRankLetter = (ch) => altToRank[ch] || ch;
+
+  const sortSuitString = (str) => {
+    if (!str) return '';
+    // Normalise to rank letters, remove duplicates, then sort high-to-low
+    const letters = str
+      .toUpperCase()
+      .split('')
+      .map(toRankLetter)
+      .filter(Boolean);
+
+    const uniq = Array.from(new Set(letters));
+    uniq.sort((a,b) => rankOrder.indexOf(a) - rankOrder.indexOf(b));
+    return uniq.join('');
+  };
+
+  const swapCardsBetweenHands = (from, to) => {
+    if (!setHands) return;
+    if (!from || !to) return;
+    if (from.direction === to.direction && from.suitCode === to.suitCode && from.rank === to.rank) return;
+
+    // Never allow swapping cards that are already in the play sequence
+    const fromPlayed = isCardPlayed(from.suitCode, from.rank.toLowerCase() === 't' ? 't' : from.rank.toLowerCase());
+    const toPlayed = isCardPlayed(to.suitCode, to.rank.toLowerCase() === 't' ? 't' : to.rank.toLowerCase());
+    if (fromPlayed || toPlayed) return;
+
+    const fromSuitName = suitCodeToName[from.suitCode];
+    const toSuitName = suitCodeToName[to.suitCode];
+    if (!fromSuitName || !toSuitName) return;
+
+    setHands(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+
+      // Remove the two original cards
+      next[from.direction][fromSuitName] = removeRankOnce(next[from.direction][fromSuitName], from.rank);
+      next[to.direction][toSuitName] = removeRankOnce(next[to.direction][toSuitName], to.rank);
+
+      // Swap the *whole cards* (rank + suit):
+      // - "to" card goes into "from" player's *to-suit*
+      // - "from" card goes into "to" player's *from-suit*
+      next[from.direction][toSuitName] = addRank(next[from.direction][toSuitName], to.rank);
+      next[to.direction][fromSuitName] = addRank(next[to.direction][fromSuitName], from.rank);
+
+      // Re-sort the affected hands (all suits) so the diagram stays tidy
+      const fixHand = (dir) => {
+        if (!next[dir]) return;
+        next[dir].spades = sortSuitString(next[dir].spades);
+        next[dir].hearts = sortSuitString(next[dir].hearts);
+        next[dir].diamonds = sortSuitString(next[dir].diamonds);
+        next[dir].clubs = sortSuitString(next[dir].clubs);
+      };
+      fixHand(from.direction);
+      fixHand(to.direction);
+
+      return next;
+    });
+  };
+
+  const onCardDragStart = (e, direction, suitCode, rankChar) => {
+    try {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/json', JSON.stringify({ direction, suitCode, rank: rankChar }));
+    } catch (_) {}
+  };
+
+  const onCardDragOver = (e, direction, suitCode, rankChar) => {
+    // Allow drop if target card is not already played
+    const played = isCardPlayed(suitCode, rankChar === 'T' ? 't' : rankChar.toLowerCase());
+    if (played) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+  };
+
+  const onCardDrop = (e, direction, suitCode, rankChar) => {
+    e.preventDefault();
+    let from = null;
+    try {
+      const raw = e.dataTransfer.getData('application/json') || e.dataTransfer.getData('text/plain');
+      from = raw ? JSON.parse(raw) : null;
+    } catch (_) {}
+    if (!from) return;
+    const to = { direction, suitCode, rank: rankChar };
+    swapCardsBetweenHands(from, to);
+  };
+
+  // Blocked for *playing* (but still allow swap)
+  const isPlayBlocked = (direction, suitCode, rankChar) => {
+    const rankLower = (rankChar === 'T') ? 't' : rankChar.toLowerCase();
+    return (
+      isCardPlayed(suitCode, rankLower) ||
+      (currentToAct && direction !== currentToAct) ||
+      (currentToAct && direction === currentToAct && currentLeadSuit && currentPlayerHasLeadSuit && suitCode !== currentLeadSuit)
+    );
+  };
+
+  // --- Follow-suit enforcement (no revoke) ---
+  // Find the current trick index and its lead suit (if any)
+  const getCurrentTrickIndexAndLeadSuit = () => {
+    let leaderTrickIndex = 0;
+    while (leaderTrickIndex < playSequence.length) {
+      const codes = extractCardCodes(playSequence[leaderTrickIndex] || '');
+      if (codes.length < 4) break;
+      leaderTrickIndex++;
+    }
+    if (leaderTrickIndex >= 13) return { trickIndex: 12, leadSuit: null };
+
+    const codes = extractCardCodes(playSequence[leaderTrickIndex] || '');
+    const leadSuit = codes.length > 0 ? codes[0][0] : null; // 's'/'h'/'d'/'c'
+    return { trickIndex: leaderTrickIndex, leadSuit };
+  };
+
+  const { leadSuit: currentLeadSuit } = getCurrentTrickIndexAndLeadSuit();
+
+  // Does the current player (currentToAct) have any unplayed card in the lead suit?
+  const currentPlayerHasLeadSuit = (() => {
+    if (!currentToAct || !currentLeadSuit) return false;
+
+    // Map suit code to our hand suit name
+    const suitMap = { s: 'spades', h: 'hearts', d: 'diamonds', c: 'clubs' };
+    const suitName = suitMap[currentLeadSuit];
+    if (!suitName) return false;
+
+    const ranksInSuit = (hands[currentToAct] && hands[currentToAct][suitName]) ? hands[currentToAct][suitName] : '';
+    const ranks = ranksInSuit.replace(/\//g, 'A')
+                             .replace(/\*/g, 'K')
+                             .replace(/-/g, 'Q')
+                             .replace(/\+/g, 'J')
+                             .replace(/1/g, 'T')
+                             .toUpperCase()
+                             .split('')
+                             .filter(Boolean);
+
+    // If any card in that suit is not played yet, you must follow suit
+    for (const r of ranks) {
+      const rankCode = (r === 'T') ? 't' : r.toLowerCase();
+      if (!isCardPlayed(currentLeadSuit, rankCode)) return true;
+    }
+    return false;
+  })();
+
+
   // Get the current trick number
   const getCurrentTrickNumber = () => {
     // Count completed tricks (those with 4 cards)
@@ -238,14 +413,16 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
   };
   
   // Function to handle card click
-  const handleCardClick = (suitCode, rankCode) => {
+  const handleCardClick = (direction, suitCode, rankCode) => {
+    // Enforce turn order if provided
+    if (currentToAct && direction !== currentToAct) return;
     // Create the new card code (e.g., "sa" for Ace of Spades)
     let cardCode = `${suitCode}${rankCode.toLowerCase()}`;
     
     // Add annotation if present
     if (cardAnnotation.trim()) {
       // Replace spaces with %20 for proper URL encoding
-      const encodedAnnotation = cardAnnotation.replace(/ /g, '%20');
+      const encodedAnnotation = encodeURIComponent(cardAnnotation);
       cardCode += `{${encodedAnnotation}}`;
     }
     
@@ -273,6 +450,9 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
     // Add the card to the current trick
     newPlaySequence[trickIndex] = (newPlaySequence[trickIndex] || '') + cardCode;
     
+    // New play invalidates redo
+    if (onClearPlayRedo) onClearPlayRedo();
+
     // Update the play sequence
     setPlaySequence(newPlaySequence);
     
@@ -280,89 +460,86 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
     setCardAnnotation('');
   };
   
-  // Get cards in the current trick
+  // Get cards in the displayed trick (in-progress trick, or last completed trick)
   const getCurrentTrickCards = () => {
-    // Find the current trick
-    for (let i = 0; i < playSequence.length; i++) {
-      // Extract actual card codes from the trick string
-      const cardCodes = extractCardCodes(playSequence[i]);
-      
-      // If this trick has less than 4 cards, it's the current trick
-      if (cardCodes.length < 4 && cardCodes.length > 0) {
-        // Parse the cards in this trick, including their annotations
-        const cards = [];
-        let position = 0;
-        let textPosition = 0;
-        
-        while (textPosition < playSequence[i].length) {
-          // Skip any text that's not a card code
-          if (textPosition + 1 >= playSequence[i].length) break;
-          
-          const suitCode = playSequence[i][textPosition];
-          const rankCode = playSequence[i][textPosition+1];
-          
-          // Check if this is a valid card code
-          if (['s', 'h', 'd', 'c'].includes(suitCode) && 
-              ['a', 'k', 'q', 'j', 't', '9', '8', '7', '6', '5', '4', '3', '2'].includes(rankCode.toLowerCase())) {
-            textPosition += 2; // Move past the card code
-            
-            // Check if there's an annotation
-            let annotation = '';
-            if (textPosition < playSequence[i].length && playSequence[i][textPosition] === '{') {
-              const startIdx = textPosition;
-              while (textPosition < playSequence[i].length && playSequence[i][textPosition] !== '}') {
-                textPosition++;
-              }
-              if (textPosition < playSequence[i].length) {
-                annotation = playSequence[i].substring(startIdx + 1, textPosition);
-                textPosition++; // Move past the closing brace
-              }
+    const parseTrickString = (trickStr) => {
+      const cards = [];
+      let textPosition = 0;
+
+      while (textPosition < trickStr.length) {
+        if (textPosition + 1 >= trickStr.length) break;
+
+        const suitCode = trickStr[textPosition];
+        const rankCode = trickStr[textPosition + 1];
+
+        if (['s', 'h', 'd', 'c'].includes(suitCode) &&
+            ['a', 'k', 'q', 'j', 't', '9', '8', '7', '6', '5', '4', '3', '2'].includes(rankCode.toLowerCase())) {
+
+          textPosition += 2;
+
+          // Optional annotation in { ... }
+          let annotation = '';
+          if (textPosition < trickStr.length && trickStr[textPosition] === '{') {
+            const startIdx = textPosition;
+            while (textPosition < trickStr.length && trickStr[textPosition] !== '}') textPosition++;
+            if (textPosition < trickStr.length) {
+              annotation = trickStr.substring(startIdx + 1, textPosition);
+              textPosition++;
             }
-            
-            // Convert the card codes to symbols
-            let suitSymbol;
-            switch (suitCode) {
-              case 's': suitSymbol = '♠'; break;
-              case 'h': suitSymbol = '♥'; break;
-              case 'd': suitSymbol = '♦'; break;
-              case 'c': suitSymbol = '♣'; break;
-              default: suitSymbol = '?';
-            }
-            
-            let rankSymbol;
-            switch (rankCode.toLowerCase()) {
-              case 'a': rankSymbol = 'A'; break;
-              case 'k': rankSymbol = 'K'; break;
-              case 'q': rankSymbol = 'Q'; break;
-              case 'j': rankSymbol = 'J'; break;
-              case 't': rankSymbol = 'T'; break;
-              default: rankSymbol = rankCode;
-            }
-            
-            cards.push({ 
-              suit: suitSymbol, 
-              rank: rankSymbol,
-              annotation: annotation.replace(/%20/g, ' ') // Convert %20 back to spaces for display
-            });
-            
-            position++;
-          } else {
-            // Not a valid card code, might be part of an annotation or something else
-            // Skip it
-            textPosition++;
           }
+
+          let suitSymbol = '?';
+          if (suitCode === 's') suitSymbol = '♠';
+          if (suitCode === 'h') suitSymbol = '♥';
+          if (suitCode === 'd') suitSymbol = '♦';
+          if (suitCode === 'c') suitSymbol = '♣';
+
+          let rankSymbol = rankCode;
+          const r = rankCode.toLowerCase();
+          if (r === 'a') rankSymbol = 'A';
+          else if (r === 'k') rankSymbol = 'K';
+          else if (r === 'q') rankSymbol = 'Q';
+          else if (r === 'j') rankSymbol = 'J';
+          else if (r === 't') rankSymbol = 'T';
+
+          cards.push({
+            suit: suitSymbol,
+            rank: rankSymbol,
+            annotation: annotation.replace(/%20/g, ' ')
+          });
+
+          continue;
         }
-        
-        return cards;
-      } else if (cardCodes.length === 0 && i === 0) {
-        // If the first trick is empty
-        return [];
+
+        // Skip annotations or other characters
+        if (trickStr[textPosition] === '{') {
+          while (textPosition < trickStr.length && trickStr[textPosition] !== '}') textPosition++;
+          if (textPosition < trickStr.length) textPosition++;
+        } else {
+          textPosition++;
+        }
       }
+
+      return cards;
+    };
+
+    // If displayTrickIndex isn't available, fall back to the first in-progress trick,
+    // otherwise the last non-empty trick.
+    let idx = (typeof displayTrickIndex === 'number' && displayTrickIndex >= 0) ? displayTrickIndex : -1;
+    if (idx < 0) {
+      let last = -1;
+      for (let t = 0; t < (playSequence || []).length; t++) {
+        const codes = extractCardCodes(playSequence[t] || '');
+        if (codes.length > 0) last = t;
+        if (codes.length > 0 && codes.length < 4) { idx = t; break; }
+      }
+      if (idx < 0) idx = last;
     }
-    
-    // If we didn't find a current trick, return an empty array
-    return [];
+    if (idx < 0) return [];
+    const trickStr = playSequence[idx] || '';
+    return parseTrickString(trickStr);
   };
+
   
   // Format a hand's cards for display with clickable cards
   const formatHand = (hand, direction) => {
@@ -383,7 +560,8 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
         suit: suit.symbol,
         suitCode: suit.code,
         cardRanks: cardRanks,
-        color: suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black'
+        color: suit.name === 'hearts' || suit.name === 'diamonds' ? 'text-red-600' : 'text-black',
+        direction: direction
       };
     });
   };
@@ -396,87 +574,73 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
   
   const currentTrickNumber = getCurrentTrickNumber();
   const currentTrickCards = getCurrentTrickCards();
-  const positionNames = ['First', 'Second', 'Third', 'Fourth'];
-  
+
   return (
     <div className="mb-4">
-      {/* Current trick display */}
-      <div className="mb-4">
-        <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-medium">Current Trick: {currentTrickNumber}</h4>
-          <button
-            onClick={onUndoLastCard}
-            disabled={playSequence.every(trick => trick === '')}
-            className={`w-12 h-10 flex items-center justify-center text-sm font-medium border rounded
-                      ${!playSequence.every(trick => trick === '')
-                        ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
-                        : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-            </svg>
-          </button>
+      {/* Handviewer-style layout */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start md:items-stretch">
+
+        {/* Board / Dealer / Vul (next to North, top-left) */}
+        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-1 md:row-start-1">
+          <div className="flex items-center space-x-3">
+            <div className="w-14 h-14 border border-gray-300 rounded bg-gray-50 flex flex-col items-center justify-center">
+              <div className="text-2xl font-bold leading-none">{boardNumber || '-'}</div>
+                          </div>
+            <div className="text-sm">
+              <div><span className="font-medium">Dealer:</span> {(dealer || 'n').toUpperCase()}</div>
+              <div><span className="font-medium">Vul:</span> {getVulLabel(vulnerability)}</div>
+            </div>
+          </div>
         </div>
-        
-        <div className="flex mb-4 min-h-16 border rounded-md bg-gray-50 p-2">
-          {currentTrickCards.length > 0 ? (
-            currentTrickCards.map((card, index) => (
-              <div key={index} className="flex-1 text-center">
-                <div className="text-xs text-gray-500">{positionNames[index]}</div>
-                <div className={`text-lg font-bold flex justify-center items-center ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
-                  <span>{card.suit}</span><span>{card.rank === 'T' ? '10' : card.rank}</span>
+
+        {/* North (top, middle) */}
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-1 h-full flex">
+          <div className="mt-auto w-full">
+            <div className="text-center font-medium mb-1 capitalize">North</div>
+            {northHand.map((suitData, index) => (
+              <div key={`north-${suitData.suit}`} className="mb-1">
+                <div className="flex items-center mb-1">
+                  <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                  {suitData.cardRanks.length > 0 ? (
+                    <div className="flex flex-wrap">
+                      {suitData.cardRanks.map((rank, idx) => (
+                        <button
+                          key={`north-${suitData.suitCode}-${rank}-${idx}`}
+                          onClick={() => {
+                            const blocked = isPlayBlocked(suitData.direction, suitData.suitCode, rank);
+                            if (blocked) return;
+                            handleCardClick(suitData.direction, suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase());
+                          }}
+                          draggable={!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                          onDragStart={(e) => onCardDragStart(e, suitData.direction, suitData.suitCode, rank)}
+                          onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
+                          onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
+                          aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
+                          className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                                    ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                      ? 'bg-gray-100 text-gray-400 border-gray-200'
+                                      : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+                        >
+                          {rank === 'T' ? '10' : rank}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-gray-500">—</span>
+                  )}
                 </div>
-                {card.annotation && (
-                  <div className="text-xs italic text-gray-600 mt-1">"{card.annotation}"</div>
-                )}
               </div>
-            ))
-          ) : (
-            <div className="flex items-center justify-center w-full text-gray-500">
-              No cards played in this trick
-            </div>
-          )}
+            ))}
+          </div>
         </div>
-      </div>
-      
-      {/* Bridge diagram with clickable cards */}
-      <div className="grid grid-cols-3 gap-2">
-        {/* North (top) */}
-        <div className="col-start-2 border border-gray-200 rounded-md p-2 bg-white">
-          <div className="text-center font-medium mb-1 capitalize">North</div>
-          {northHand.map((suitData, index) => (
-            <div key={`north-${suitData.suit}`} className="mb-1">
-              <div className="flex items-center mb-1">
-                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
-                {suitData.cardRanks.length > 0 ? (
-                  <div className="flex flex-wrap">
-                    {suitData.cardRanks.map((rank, idx) => (
-                      <button
-                        key={`north-${suitData.suitCode}-${rank}-${idx}`}
-                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
-                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
-                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
-                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
-                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
-                      >
-                        {rank === 'T' ? '10' : rank}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="text-gray-500">—</span>
-                )}
-              </div>
-            </div>
-          ))}
+        {/* Auction (next to North, top-right) */}
+        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-3 md:row-start-1">
+          <AuctionTable structuredAuction={structuredAuction || []} dealer={dealer || 'n'} />
         </div>
-        
-        {/* Empty cell */}
-        <div></div>
-        
-        {/* West (left) and East (right) in the middle row */}
-        <div className="border border-gray-200 rounded-md p-2 bg-white">
+
+        {/* West (middle-left) */}
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-1 md:row-start-2 -col h-full flex">
+          <div className="my-auto w-full">
           <div className="text-center font-medium mb-1 capitalize">West</div>
           {westHand.map((suitData, index) => (
             <div key={`west-${suitData.suit}`} className="mb-1">
@@ -487,12 +651,21 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`west-${suitData.suitCode}-${rank}-${idx}`}
-                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
-                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onClick={() => {
+                          const blocked = isPlayBlocked(suitData.direction, suitData.suitCode, rank);
+                          if (blocked) return;
+                          handleCardClick(suitData.direction, suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase());
+                        }}
+                        draggable={!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onDragStart={(e) => onCardDragStart(e, suitData.direction, suitData.suitCode, rank)}
+                        onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
+                        onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
+                        aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
                         className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
-                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
-                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                                  ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
+                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+
                       >
                         {rank === 'T' ? '10' : rank}
                       </button>
@@ -504,13 +677,58 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
               </div>
             </div>
           ))}
+          </div>
         </div>
-        
-        {/* Empty center cell */}
-        <div className="flex items-center justify-center">
+
+        {/* Table area (middle) */}
+        <div className="border border-gray-200 rounded-md bg-white p-2 flex flex-col items-stretch justify-between md:col-start-2 md:row-start-2">
+
+          {/* Played cards in the current trick (shown between players) */}
+          {(() => {
+            const order = ['north', 'east', 'south', 'west'];
+            const leader = displayTrickLeader || 'north';
+            const leaderIndex = order.indexOf(leader);
+            const seatForIndex = (i) => order[(leaderIndex + i) % 4];
+
+            const cardMap = {};
+            (currentTrickCards || []).forEach((card, i) => {
+              cardMap[seatForIndex(i)] = card;
+            });
+
+            const CardFace = ({ card }) => {
+              if (!card) return <div className="w-10 h-14"></div>;
+              return (
+                <div className="w-10 h-14 border border-gray-300 rounded-md bg-white shadow-sm flex flex-col items-center justify-center">
+                  <div className={`text-sm font-bold ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
+                    {card.rank === 'T' ? '10' : card.rank}
+                  </div>
+                  <div className={`text-lg leading-none ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
+                    {card.suit}
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+              <div className="grid grid-cols-3 grid-rows-3 gap-2 mx-auto">
+                <div></div>
+                <CardFace card={cardMap.north} />
+                <div></div>
+
+                <CardFace card={cardMap.west} />
+                <div></div>
+                <CardFace card={cardMap.east} />
+
+                <div></div>
+                <CardFace card={cardMap.south} />
+                <div></div>
+              </div>
+            );
+          })()}
         </div>
-        
-        <div className="border border-gray-200 rounded-md p-2 bg-white">
+        {/* East (middle-right) */}
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-3 md:row-start-2 -col h-full flex">
+          <div className="my-auto w-full">
           <div className="text-center font-medium mb-1 capitalize">East</div>
           {eastHand.map((suitData, index) => (
             <div key={`east-${suitData.suit}`} className="mb-1">
@@ -521,12 +739,21 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`east-${suitData.suitCode}-${rank}-${idx}`}
-                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
-                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onClick={() => {
+                          const blocked = isPlayBlocked(suitData.direction, suitData.suitCode, rank);
+                          if (blocked) return;
+                          handleCardClick(suitData.direction, suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase());
+                        }}
+                        draggable={!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onDragStart={(e) => onCardDragStart(e, suitData.direction, suitData.suitCode, rank)}
+                        onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
+                        onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
+                        aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
                         className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
-                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
-                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                                  ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
+                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+
                       >
                         {rank === 'T' ? '10' : rank}
                       </button>
@@ -538,13 +765,47 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
               </div>
             </div>
           ))}
+          </div>
         </div>
+
+        {/* Spacer for bottom-left (keeps South centered on desktop) */}
         
-        {/* Empty cell */}
-        <div></div>
-        
-        {/* South (bottom) */}
-        <div className="col-start-2 border border-gray-200 rounded-md p-2 bg-white">
+        {/* Bottom-left block with Undo (below West, next to South) */}
+        <div className="border border-gray-200 rounded-md bg-white p-2 flex items-end md:col-start-1 md:row-start-3">
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={onUndoLastCard}
+              disabled={playSequence.every(trick => trick === '')}
+              title="Undo"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${!playSequence.every(trick => trick === '')
+                          ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+            </button>
+
+            <button
+              onClick={onRedoLastCard}
+              disabled={!canRedoLastCard}
+              title="Redo"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${canRedoLastCard
+                          ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+
+        {/* South (bottom-middle) */}
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-3">
           <div className="text-center font-medium mb-1 capitalize">South</div>
           {southHand.map((suitData, index) => (
             <div key={`south-${suitData.suit}`} className="mb-1">
@@ -555,12 +816,21 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`south-${suitData.suitCode}-${rank}-${idx}`}
-                        onClick={() => handleCardClick(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
-                        disabled={isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onClick={() => {
+                          const blocked = isPlayBlocked(suitData.direction, suitData.suitCode, rank);
+                          if (blocked) return;
+                          handleCardClick(suitData.direction, suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase());
+                        }}
+                        draggable={!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())}
+                        onDragStart={(e) => onCardDragStart(e, suitData.direction, suitData.suitCode, rank)}
+                        onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
+                        onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
+                        aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
                         className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
-                                  ${!isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? `hover:bg-blue-100 border-gray-300 ${suitData.color}`
-                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+                                  ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
+                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
+                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+
                       >
                         {rank === 'T' ? '10' : rank}
                       </button>
@@ -573,15 +843,30 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
             </div>
           ))}
         </div>
+
+        {/* Contract + trick count (below East, next to South) */}
+        <div className="border border-gray-200 rounded-md bg-white px-3 py-2 text-sm flex flex-col justify-end items-end text-right md:col-start-3 md:row-start-3">
+          <div className="font-medium">
+            {contractDisplay
+              ? contractDisplay.split('').map((ch, i) =>
+                  (ch === '♥' || ch === '♦')
+                    ? <span key={i} className="text-red-600">{ch}</span>
+                    : <span key={i}>{ch}</span>
+                )
+              : '-'}
+          </div>
+          <div className="text-gray-700">NS: {typeof nsTricks === 'number' ? nsTricks : 0} &nbsp; EW: {typeof ewTricks === 'number' ? ewTricks : 0}</div>
+        </div>
+
       </div>
-      
+
       {/* Card Annotation textarea now placed here, after the bridge diagram */}
       <div className="my-4">
         <textarea
           value={cardAnnotation}
           onChange={(e) => setCardAnnotation(e.target.value)}
           placeholder="Add annotation for the next played card"
-          className="w-full px-3 py-2 border border-gray-300 rounded-md h-20 resize-y"
+          className="w-full px-3 py-1 border border-gray-300 rounded-md h-20 resize-y"
         />
       </div>
     </div>
@@ -589,7 +874,16 @@ const BridgeDiagram = ({ hands, playSequence, setPlaySequence, onUndoLastCard, c
 };
 
 // Auction Table Component
-const AuctionTable = ({ structuredAuction, dealer }) => {
+const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnnotation }) => {
+  const [activeAlert, setActiveAlert] = React.useState(null);
+  // activeAlert: { text?: string, x: number, y: number, index?: number, editing?: boolean, tab?: 'alert' | 'note', alertText?: string, noteText?: string }
+  React.useEffect(() => {
+    if (!activeAlert) return;
+    const handleDocClick = () => setActiveAlert(null);
+    document.addEventListener('click', handleDocClick);
+    return () => document.removeEventListener('click', handleDocClick);
+  }, [activeAlert]);
+
   // Format the auction into rows
   const formatAuctionRows = () => {
     const positions = ['w', 'n', 'e', 's'];
@@ -607,7 +901,7 @@ const AuctionTable = ({ structuredAuction, dealer }) => {
     }
     
     // Fill in bids
-    structuredAuction.forEach(bidInfo => {
+    structuredAuction.forEach((bidInfo, bidIndex) => {
       const { bid, alert, annotation } = bidInfo;
       
       // Format the bid nicely
@@ -638,23 +932,57 @@ const AuctionTable = ({ structuredAuction, dealer }) => {
         }
       }
       
-      // Add alert indicator if present
-      if (alert) {
-        displayBid = <span>{displayBid}<span className="text-red-500">*</span></span>;
-      }
       
-      // Add annotation indicator if present
-      if (annotation) {
-        displayBid = <span>{displayBid}<span className="text-blue-500">†</span></span>;
+      // Click a bid to add/edit its alert or note (when enabled in the bidding box).
+      // Outside the bidding box, alerted bids still show their alert text when clicked.
+      const canOpenEditor = !!onEditBidAlert || !!onEditBidAnnotation;
+      if (canOpenEditor || alert) {
+        const bidTextClass = bid === 'p'
+          ? 'text-gray-500'
+          : bid === 'd'
+            ? 'text-red-600 font-medium'
+            : bid === 'r'
+              ? 'text-blue-600 font-medium'
+              : 'text-black';
+
+        displayBid = (
+          <span
+            className={`${alert ? 'bg-yellow-200' : 'hover:bg-gray-100'} ${bidTextClass} px-1 rounded cursor-pointer inline-block`}
+            onClick={(e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              const x = Math.min(r.right + 8, window.innerWidth - 320);
+              const y = Math.max(r.top - 4, 8);
+              if (canOpenEditor) {
+                setActiveAlert({
+                  x,
+                  y,
+                  index: bidIndex,
+                  editing: true,
+                  tab: 'alert',
+                  alertText: alert || '',
+                  noteText: annotation || ''
+                });
+              } else if (alert) {
+                const xAbove = Math.min(Math.max(r.left + (r.width / 2), 12), window.innerWidth - 12);
+                const yAbove = Math.max(r.top - 6, 12);
+                setActiveAlert({ text: alert, x: xAbove, y: yAbove, editing: false });
+              }
+            }}
+            title={canOpenEditor ? 'Click to add or edit alert or note' : 'Click to view alert'}
+          >
+            {displayBid}
+          </span>
+        );
       }
-      
+
       rows[currentRow][currentPos] = displayBid;
       
       // Move to next position
       currentPos = (currentPos + 1) % 4;
       
-      // If we wrapped around, create a new row
-      if (currentPos === 0) {
+      // If we wrapped around, create a new row *only if there are more bids to come*
+      if (currentPos === 0 && bidIndex < structuredAuction.length - 1) {
         rows.push(Array(4).fill(''));
         currentRow++;
       }
@@ -669,7 +997,8 @@ const AuctionTable = ({ structuredAuction, dealer }) => {
   const rowsToDisplay = auctionRows.length > 0 ? auctionRows : [Array(4).fill('')];
   
   return (
-    <table className="w-full border-collapse table-fixed">
+    <div className="relative">
+      <table className="w-full border-collapse table-fixed">
       <thead>
         <tr>
           <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">West</th>
@@ -698,11 +1027,70 @@ const AuctionTable = ({ structuredAuction, dealer }) => {
         ))}
       </tbody>
     </table>
+      {activeAlert && (
+        <div
+          className={`fixed z-50 inline-block ${activeAlert.editing ? 'min-w-[220px] w-72 max-w-[calc(100vw-24px)] max-h-[calc(100vh-24px)] bg-white border border-gray-300 resize overflow-auto flex flex-col' : 'max-w-xs bg-yellow-50 border border-yellow-300'} rounded-md shadow px-2 py-2 text-xs text-gray-900`}
+          style={{ left: activeAlert.x, top: activeAlert.y, transform: activeAlert.editing ? 'none' : 'translate(-50%, -100%)' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {activeAlert.editing && typeof activeAlert.index === 'number' ? (
+            <>
+              <div className="flex mb-2 overflow-hidden rounded border border-gray-200">
+                <button
+                  className={`px-3 py-1 text-xs font-medium ${activeAlert.tab === 'alert' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                  onClick={() => setActiveAlert(prev => prev ? { ...prev, tab: 'alert' } : prev)}
+                >
+                  Alert
+                </button>
+                <button
+                  className={`px-3 py-1 text-xs font-medium ${activeAlert.tab === 'note' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                  onClick={() => setActiveAlert(prev => prev ? { ...prev, tab: 'note' } : prev)}
+                >
+                  Annotation
+                </button>
+              </div>
+
+              {activeAlert.tab === 'note' ? (
+                <textarea
+                  value={activeAlert.noteText || ''}
+                  onChange={(e) => {
+                    const newText = e.target.value;
+                    setActiveAlert(prev => prev ? { ...prev, noteText: newText } : prev);
+                    if (onEditBidAnnotation) onEditBidAnnotation(activeAlert.index, newText);
+                  }}
+                  rows={1}
+                  autoFocus
+                  style={{ minHeight: '32px' }}
+                  className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none bg-white overflow-auto"
+                  placeholder="Add annotation..."
+                />
+              ) : (
+                <textarea
+                  value={activeAlert.alertText || ''}
+                  onChange={(e) => {
+                    const newText = e.target.value;
+                    setActiveAlert(prev => prev ? { ...prev, alertText: newText } : prev);
+                    if (onEditBidAlert) onEditBidAlert(activeAlert.index, newText);
+                  }}
+                  rows={1}
+                  autoFocus
+                  style={{ minHeight: '32px' }}
+                  className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none bg-white overflow-auto"
+                  placeholder="Add alert..."
+                />
+              )}
+            </>
+          ) : (
+            activeAlert.text
+          )}
+        </div>
+      )}
+    </div>
   );
 };
 
 // Bidding Box Component
-const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, alertMessage, setAlertMessage, bidAnnotation, setBidAnnotation }) => {
+const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, alertMessage, setAlertMessage, bidAnnotation, setBidAnnotation, onRedoLastBid, canRedoLastBid }) => {
   // Define possible bids
   const levels = [1, 2, 3, 4, 5, 6, 7];
   const suits = [
@@ -890,57 +1278,37 @@ const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, aler
           XX
         </button>
         
-        {/* Empty div to take up space for the fourth column */}
-        <div className="w-12 h-10 mx-1"></div>
-        
-        {/* Undo button in 5th column, aligned with NT */}
         <button
           onClick={onUndoLastBid}
           disabled={currentAuction.length === 0}
+          title="Undo"
           className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
                     ${currentAuction.length > 0
                       ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
                       : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
           </svg>
         </button>
+
+        <button
+          onClick={onRedoLastBid}
+          disabled={!canRedoLastBid}
+          title="Redo"
+          className={`w-12 h-10 mx-1 flex items-center justify-center text-sm font-medium border rounded
+                    ${canRedoLastBid
+                      ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+          </svg>
+        </button>
+
       </div>
 
-      {/* Alert input with precise alignment */}
-      <div className="flex items-center mt-3">
-        {/* Label aligned with Pass button */}
-        <div className="w-12 mx-1 text-center">
-          <label className="block text-sm font-medium text-gray-700">Alert</label>
-        </div>
-        {/* Textbox aligned from X button to end of 7NT */}
-        <div style={{ width: "224px" }}> {/* Exactly 4 buttons × (48px width + 8px margins) */}
-          <input
-            type="text"
-            value={alertMessage}
-            onChange={(e) => setAlertMessage(e.target.value)}
-            placeholder="Explain bid here"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-          />
-        </div>
-      </div>
       
-      {/* Annotation input */}
-      <div className="flex items-center mt-3">
-        {/* Align annotation textarea with alert input */}
-        <div className="w-12 mx-1"> 
-          {/* Empty div for spacing */}
-        </div>
-        <div style={{ width: "224px" }}> {/* Match the width of alert input */}
-          <textarea
-            value={bidAnnotation}
-            onChange={(e) => setBidAnnotation(e.target.value)}
-            placeholder="Add annotation here"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md h-20 resize-y"
-          />
-        </div>
-      </div>
     </div>
   );
 };
@@ -964,26 +1332,84 @@ const BridgeHandviewerApp = () => {
   const [dealer, setDealer] = useState('n');
   const [vulnerability, setVulnerability] = useState('-');
   const [boardNumber, setBoardNumber] = useState('');
+
+  const vulFromBoardNumber = (bn) => {
+    const n = parseInt(String(bn || '').trim(), 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const b = ((n - 1) % 16) + 1;
+    // Return app codes: '-' none, 'n' NS, 'e' EW, 'b' Both
+    if (b === 1) return '-';
+    if (b === 2) return 'n';
+    if (b === 3) return 'e';
+    if (b === 4) return 'b';
+    if (b === 5) return 'n';
+    if (b === 6) return 'e';
+    if (b === 7) return 'b';
+    if (b === 8) return '-';
+    if (b === 9) return 'e';
+    if (b === 10) return 'b';
+    if (b === 11) return '-';
+    if (b === 12) return 'n';
+    if (b === 13) return 'b';
+    if (b === 14) return '-';
+    if (b === 15) return 'n';
+    if (b === 16) return 'e';
+    return '-';
+  };
+
+  const dealerFromBoardNumber = (bn) => {
+    const n = parseInt(String(bn || '').trim(), 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const m = (n - 1) % 4; // 0..3
+    if (m === 0) return 'n';
+    if (m === 1) return 'e';
+    if (m === 2) return 's';
+    return 'w';
+  };
   const [kibitzer, setKibitzer] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [auction, setAuction] = useState('');
   const [structuredAuction, setStructuredAuction] = useState([]);
-  const [showBiddingBox, setShowBiddingBox] = useState(false);
-  const [showBridgeDiagram, setShowBridgeDiagram] = useState(false); // State for bridge diagram
+  const [bidRedoStack, setBidRedoStack] = useState([]);
+  const [showBiddingBox, setShowBiddingBox] = useState(true);
+  const [showBridgeDiagram, setShowBridgeDiagram] = useState(true); // State for bridge diagram
+  const [showAnnotations, setShowAnnotations] = useState(false); // Annotation panel (collapsed by default)
+  const [showPlayRecord, setShowPlayRecord] = useState(false); // Play record text list (collapsed by default)
+  const [showPlayGrid, setShowPlayGrid] = useState(true); // Play sequence grid
+  const [activePlayGridPopup, setActivePlayGridPopup] = useState(null); // { trickIndex, cardIndex, x, y }
   const [showCardPicker, setShowCardPicker] = useState(false); // State for card picker
   const [alertMessage, setAlertMessage] = useState('');
   const [bidAnnotation, setBidAnnotation] = useState(''); // New state for bid annotation
   const [cardAnnotation, setCardAnnotation] = useState(''); // New state for card annotation
   const [playSequence, setPlaySequence] = useState(Array(13).fill(''));
+  const [playRedoStack, setPlayRedoStack] = useState([]);
   const [claimedTricks, setClaimedTricks] = useState('');
   const [generatedUrl, setGeneratedUrl] = useState('');
-  const [error, setError] = useState('');
+const [error, setError] = useState('');
   // Initialize separate copied state for different copy buttons
   const [urlCopied, setUrlCopied] = useState(false);
   const [embedCopied, setEmbedCopied] = useState(false);
   const [importUrl, setImportUrl] = useState('');
+  const [importFileName, setImportFileName] = useState('');
   const [showImport, setShowImport] = useState(false);
+
+  useEffect(() => {
+    if (!activePlayGridPopup) return;
+    const handleDocClick = () => setActivePlayGridPopup(null);
+    document.addEventListener('click', handleDocClick);
+    return () => document.removeEventListener('click', handleDocClick);
+  }, [activePlayGridPopup]);
+
+  useEffect(() => {
+    const v = vulFromBoardNumber(boardNumber);
+    if (v) setVulnerability(v);
+  }, [boardNumber]);
+
+  useEffect(() => {
+    const d = dealerFromBoardNumber(boardNumber);
+    if (d) setDealer(d);
+  }, [boardNumber]);
 
   // Define ranks array for use in multiple places
   const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
@@ -1098,7 +1524,7 @@ const BridgeHandviewerApp = () => {
 
               // Optional alert/annotation in LIN uses 'an'
               if (j + 1 < parts.length && parts[j + 1] === 'an') {
-                const annotation = decodeURIComponent(parts[j + 2] || '').replace(/ /g, '%20');
+                const annotation = encodeURIComponent(decodeURIComponent(parts[j + 2] || ''));
                 convertedBid += `(${annotation})`;
                 j += 2; // Skip the 'an' and annotation text
               }
@@ -1159,7 +1585,6 @@ const BridgeHandviewerApp = () => {
         }
 
       }
-      
       return result;
     } catch (err) {
       throw new Error(`Failed to parse LIN format: ${err.message}`);
@@ -1230,37 +1655,298 @@ const BridgeHandviewerApp = () => {
       // Parse vulnerability
       if (params.has('v')) result.vulnerability = params.get('v');
       
-      // Parse board number
+      
+      // Parse player names (nn/sn/en/wn)
+      if (params.has('nn')) result.names.north = params.get('nn');
+      if (params.has('sn')) result.names.south = params.get('sn');
+      if (params.has('en')) result.names.east = params.get('en');
+      if (params.has('wn')) result.names.west = params.get('wn');
+
+// Parse board number
       if (params.has('b')) result.boardNumber = params.get('b');
       
-      // Parse auction
-      if (params.has('a')) result.auction = params.get('a');
-      
-      // Parse play sequence
-      if (params.has('p')) {
-        const playString = params.get('p');
-        // Group into tricks of 4 cards
-        const tricks = [];
-        for (let i = 0; i < playString.length; i += 8) {
-          const trick = playString.substring(i, i + 8);
-          if (trick.length >= 2) {
-            tricks.push(trick);
+      // Parse auction (keep alerts/annotations, but re-encode their content for stable URLs)
+      if (params.has('a')) {
+        const aRaw = params.get('a') || '';
+        let rebuilt = '';
+        for (let i = 0; i < aRaw.length; i++) {
+          const ch = aRaw[i];
+
+          if (ch === '(') {
+            const end = aRaw.indexOf(')', i + 1);
+            if (end !== -1) {
+              const inside = aRaw.substring(i + 1, end);
+              rebuilt += '(' + encodeURIComponent(inside) + ')';
+              i = end;
+              continue;
+            }
           }
+
+          if (ch === '{') {
+            const end = aRaw.indexOf('}', i + 1);
+            if (end !== -1) {
+              const inside = aRaw.substring(i + 1, end);
+              rebuilt += '{' + encodeURIComponent(inside) + '}';
+              i = end;
+              continue;
+            }
+          }
+
+          rebuilt += ch;
         }
-        
-        // Fill the play sequence array
+        result.auction = rebuilt;
+      }
+
+      // Parse play sequence (supports handviewer annotations like: sa{note}sq{note}st...)
+      if (params.has('p')) {
+        const pRaw = params.get('p') || '';
+        const cardRegex = /([shdc])([akqjt98765432])(\{[^}]*\})?/gi;
+
+        const played = [];
+        let cm;
+        while ((cm = cardRegex.exec(pRaw)) !== null) {
+          const suit = cm[1].toLowerCase();
+          const rank = cm[2].toLowerCase();
+          let token = `${suit}${rank}`;
+
+          if (cm[3]) {
+            const inside = cm[3].slice(1, -1);
+            token += `{${encodeURIComponent(inside)}}`;
+          }
+
+          played.push(token);
+        }
+
+        const tricks = [];
+        for (let i = 0; i < played.length; i += 4) {
+          tricks.push(played.slice(i, i + 4).join(''));
+        }
+
         for (let i = 0; i < Math.min(tricks.length, 13); i++) {
           result.playSequence[i] = tricks[i];
         }
       }
-      
-      return result;
+return result;
     } catch (err) {
       throw new Error(`Failed to parse handviewer URL: ${err.message}`);
     }
   };
 
-  // Function to import from URL
+  
+  // Parse a PBN record (basic support: Deal, Dealer, Vulnerable, Board, Auction, Play, Claim, player names)
+  const parsePBNText = (pbnText) => {
+    try {
+      const text = (pbnText || '').replace(/\r\n/g, '\n');
+
+      // Collect tags like: [Deal "N:..."]
+      const tags = {};
+      const tagRegex = /\[(\w+)\s+"([^"]*)"\]/g;
+      let m;
+      while ((m = tagRegex.exec(text)) !== null) {
+        tags[m[1]] = m[2];
+      }
+
+      const result = {
+        hands: {
+          north: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          east: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          south: { spades: '', hearts: '', diamonds: '', clubs: '' },
+          west: { spades: '', hearts: '', diamonds: '', clubs: '' }
+        },
+        names: {
+          north: tags.North || 'North',
+          east: tags.East || 'East',
+          south: tags.South || 'South',
+          west: tags.West || 'West'
+        },
+        dealer: 'n',
+        vulnerability: 'none',
+        boardNumber: '',
+        auction: '',
+        playSequence: Array(13).fill(''),
+        claimedTricks: ''
+      };
+
+      if (tags.Board) result.boardNumber = tags.Board;
+
+      if (tags.Dealer) {
+        const d = tags.Dealer.trim().toLowerCase();
+        if (['n', 'e', 's', 'w'].includes(d)) result.dealer = d;
+      }
+
+      if (tags.Vulnerable) {
+        const v = tags.Vulnerable.trim().toLowerCase();
+        if (v === 'none' || v === 'love' || v === '-') result.vulnerability = 'none';
+        else if (v === 'all' || v === 'both') result.vulnerability = 'all';
+        else if (v === 'ns') result.vulnerability = 'ns';
+        else if (v === 'ew') result.vulnerability = 'ew';
+      }
+
+      // Deal: e.g. N:AKQJ.T98.AT.987  ... (4 hands)
+      if (tags.Deal) {
+        const deal = tags.Deal.trim();
+        const parts = deal.split(':');
+        if (parts.length === 2) {
+          const startDir = parts[0].trim().toLowerCase(); // n/e/s/w
+          const handsStr = parts[1].trim();
+          const handParts = handsStr.split(/\s+/).filter(Boolean);
+          if (handParts.length >= 4 && ['n','e','s','w'].includes(startDir)) {
+            const order = ['n','e','s','w'];
+            const startIdx = order.indexOf(startDir);
+            const dirForIndex = (k) => order[(startIdx + k) % 4];
+
+            for (let k = 0; k < 4; k++) {
+              const dir = dirForIndex(k);
+              const hp = handParts[k];
+              const suits = hp.split('.');
+              const sp = (suits[0] || '').replace(/-/g, '');
+              const he = (suits[1] || '').replace(/-/g, '');
+              const di = (suits[2] || '').replace(/-/g, '');
+              const cl = (suits[3] || '').replace(/-/g, '');
+
+              const map = dir === 'n' ? 'north' : dir === 'e' ? 'east' : dir === 's' ? 'south' : 'west';
+              result.hands[map] = { spades: sp, hearts: he, diamonds: di, clubs: cl };
+            }
+          }
+        }
+      }
+
+      // Claim
+      if (tags.Claim) {
+        const c = tags.Claim.trim();
+        if (c && c.match(/^\d+$/)) result.claimedTricks = c;
+      }
+
+            // Auction section (supports basic bids + PBN Notes for alerts)
+      const noteMap = {};
+      const noteRegex = /\[Note\s+\"(\d+):([^\"]*)\"\]/gi;
+      let nm2;
+      while ((nm2 = noteRegex.exec(text)) !== null) {
+        noteMap[Number(nm2[1])] = (nm2[2] || '').trim();
+      }
+
+      const auctionStart = text.match(/\[Auction\s+\"[^\"]*\"\]\s*\n([\s\S]*?)(?=\n\[\w+\s+\"|\n\s*$)/i);
+      if (auctionStart && auctionStart[1]) {
+        let a = auctionStart[1].replace(/\{[\s\S]*?\}/g, ' '); // remove { } comments
+        a = a.replace(/;/g, ' ').replace(/\./g, ' ');         // remove separators
+        const tokens = a.split(/\s+/).filter(Boolean);
+
+        const out = [];
+        let pendingNoteNo = null;
+        for (const t0 of tokens) {
+          let t = (t0 || '').trim();
+          if (!t) continue;
+
+          if (t.toUpperCase() === 'AP') {
+            // All pass (some PBNs use AP)
+            out.push('p', 'p', 'p', 'p');
+            break;
+          }
+
+          // Some exporters may put the note marker as a standalone token: =n=
+          const standalone = t.match(/^=(\d+)=$/);
+          if (standalone) {
+            pendingNoteNo = Number(standalone[1]);
+            continue;
+          }
+
+          // Extract optional alert marker attached to the bid token: 1NT=3=
+          let noteNo = null;
+          const markerMatch = t.match(/^(.*?)(?:=(\d+)=)?$/);
+          if (markerMatch) {
+            t = (markerMatch[1] || '').trim();
+            noteNo = markerMatch[2] ? Number(markerMatch[2]) : null;
+          }
+
+          // If marker came as a standalone token right before, apply it here
+          if (!noteNo && pendingNoteNo) {
+            noteNo = pendingNoteNo;
+            pendingNoteNo = null;
+          }
+
+          const u = t.toUpperCase();
+          let bid = null;
+
+          if (u === 'P' || u === 'PASS') bid = 'p';
+          else if (u === 'X' || u === 'D' || u === 'DBL' || u === 'DOUBLE') bid = 'd';
+          else if (u === 'XX' || u === 'R' || u === 'RDBL' || u === 'REDOUBLE') bid = 'r';
+          else if (u.match(/^[1-7][CDHSN]$/)) bid = u.toLowerCase();
+
+          if (bid) {
+            let compact = bid;
+            const noteText = (noteNo && noteMap[noteNo]) ? noteMap[noteNo] : '';
+            if (noteText) compact += `(${noteText})`;
+            out.push(compact);
+          }
+        }
+        result.auction = out.join('');
+      }
+
+      // Play section
+      const playStart = text.match(/\[Play\s+"[^"]*"\]\s*\n([\s\S]*?)(?=\n\[\w+\s+"|\n\s*$)/i);
+      if (playStart && playStart[1]) {
+        const p = playStart[1];
+        const cardRegex = /([SHDC])([AKQJT98765432])/gi;
+        const cards = [];
+        let cm;
+        while ((cm = cardRegex.exec(p)) !== null) {
+          cards.push(`${cm[1].toLowerCase()}${cm[2].toLowerCase()}`);
+        }
+
+        const tricks = [];
+        for (let k = 0; k < cards.length; k += 4) {
+          tricks.push(cards.slice(k, k + 4).join(''));
+        }
+        for (let k = 0; k < Math.min(tricks.length, 13); k++) {
+          result.playSequence[k] = tricks[k];
+        }
+      }
+
+      // BridgeHandviewer app metadata (round-trip import)
+      // Look for comment lines like:
+      // %BHVA:BASE64...
+      try {
+        const b64Parts = [];
+        const b64LineRegex = /^%BHVA:([A-Za-z0-9+/=]+)\s*$/gm;
+        let bm;
+        while ((bm = b64LineRegex.exec(text)) !== null) {
+          b64Parts.push(bm[1]);
+        }
+        if (b64Parts.length) {
+          const b64 = b64Parts.join('');
+          const json = decodeURIComponent(escape(atob(b64)));
+          const meta = JSON.parse(json);
+          // Attach to result so the importer can restore alerts/annotations reliably
+          result._bhvaMeta = meta;
+
+          // If metadata has play/auction, prefer it for round-trip accuracy
+          if (meta && Array.isArray(meta.playSequence)) {
+            result.playSequence = meta.playSequence.slice(0, 13).concat(Array(13).fill('')).slice(0, 13);
+          }
+          if (meta && Array.isArray(meta.structuredAuction)) {
+            // Build compact auction string (with alerts/annotations) so existing importer keeps working
+            result.auction = meta.structuredAuction.map(item => {
+              let s = item.bid || '';
+              if (item.alert) s += `(${item.alert})`;
+              if (item.annotation) s += `{${item.annotation}}`;
+              return s;
+            }).join('');
+          }
+          if (meta && typeof meta.claimedTricks === 'string') {
+            result.claimedTricks = meta.claimedTricks;
+          }
+        }
+      } catch (e) {
+        // Ignore metadata parse errors; fall back to basic PBN parsing
+      }
+
+      return result;
+    } catch (err) {
+      throw new Error(`Failed to parse PBN: ${err.message}`);
+    }
+  };
+
+// Function to import from URL
   const handleImportUrl = () => {
     try {
       setError('');
@@ -1328,6 +2014,7 @@ const BridgeHandviewerApp = () => {
         }
         
         setStructuredAuction(newStructuredAuction);
+    setBidRedoStack([]);
       }
       
       setImportUrl('');
@@ -1338,7 +2025,83 @@ const BridgeHandviewerApp = () => {
     }
   };
 
-  // Function to check if a card is already assigned to any hand
+  
+  // Function to import from a PBN file upload (instead of pasting text)
+  const handleImportFile = (file) => {
+    if (!file) return;
+
+    const name = file.name || '';
+    setImportFileName(name);
+    setError('');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || '');
+
+        let parsed;
+        // If it's a .pbn file (or looks like PBN), parse as PBN
+        if (name.toLowerCase().endsWith('.pbn') || (text.trim().startsWith('[') && text.includes('[Deal'))) {
+          parsed = parsePBNText(text);
+        } else {
+          // Fallback: try LIN or handviewer
+          try {
+            parsed = parseLINFormat(text);
+          } catch {
+            parsed = parseHandviewerUrl(text);
+          }
+        }
+
+        // Update all state (same as URL import)
+        setHands(parsed.hands);
+        setNames(parsed.names);
+        setDealer(parsed.dealer);
+        setVulnerability(parsed.vulnerability);
+        setBoardNumber(parsed.boardNumber);
+        setAuction(parsed.auction);
+        setPlaySequence(parsed.playSequence);
+        setClaimedTricks(parsed.claimedTricks || '');
+
+        // Parse auction into structured format
+        if (parsed.auction) {
+          const positions = ['w', 'n', 'e', 's'];
+          const dealerIndex = positions.indexOf(parsed.dealer.toLowerCase());
+          const newStructuredAuction = [];
+          let currentIndex = dealerIndex;
+
+          const regex = /([1-7][cdhsn]|p|d|r)(?:\(([^)]*)\))?(?:\{([^}]*)\})?/g;
+          let match;
+
+          while ((match = regex.exec(parsed.auction)) !== null) {
+            const [_, bid, alert, annotation] = match;
+
+            newStructuredAuction.push({
+              direction: positions[currentIndex],
+              bid: bid,
+              alert: alert ? alert.replace(/%20/g, ' ') : '',
+              annotation: annotation || ''
+            });
+
+            currentIndex = (currentIndex + 1) % 4;
+          }
+
+          setStructuredAuction(newStructuredAuction);
+        } else {
+          setStructuredAuction([]);
+        }
+
+        setImportUrl('');
+        setShowImport(false);
+      } catch (err) {
+        setError(`Import failed: ${err.message}`);
+      }
+    };
+
+    reader.onerror = () => setError('Failed to read the file');
+    reader.readAsText(file);
+  };
+
+// Function to check if a card is already assigned to any hand
   const isCardAssigned = (suit, rank) => {
     return Object.values(hands).some(hand => 
       hand[suit].includes(rank === 'T' ? 'T' : rank)
@@ -1498,12 +2261,12 @@ const BridgeHandviewerApp = () => {
     
     // Use regex to find all annotations in curly braces and replace spaces with %20
     let processed = text.replace(/\{([^}]*)\}/g, (match, content) => {
-      return '{' + content.replace(/ /g, '%20') + '}';
+      return '{' + encodeURIComponent(content) + '}';
     });
     
     // Also process alerts in parentheses
     processed = processed.replace(/\(([^)]*)\)/g, (match, content) => {
-      return '(' + content.replace(/ /g, '%20') + ')';
+      return '(' + encodeURIComponent(content) + ')';
     });
     
     return processed;
@@ -1558,100 +2321,222 @@ const BridgeHandviewerApp = () => {
     setBidAnnotation('');
   };
 
+  // --- Bid annotation panel helpers (Phase 1: edit annotations safely) ---
+  const buildCompactAuction = (arr) => (arr || []).map(item => {
+    let result = item.bid;
+    if (item.alert) result += `(${item.alert})`;
+    if (item.annotation) result += `{${item.annotation}}`;
+    return result;
+  }).join('');
+
+  const updateBidAnnotationAt = (index, newText) => {
+    setStructuredAuction(prev => {
+      const next = (prev || []).map((x, i) => (i === index ? { ...x, annotation: newText } : x));
+      setAuction(buildCompactAuction(next));
+      return next;
+    });
+  };
+
+  const updateBidAlertAt = (index, newText) => {
+    setStructuredAuction(prev => {
+      const next = (prev || []).map((x, i) => (i === index ? { ...x, alert: newText } : x));
+      setAuction(buildCompactAuction(next));
+      return next;
+    });
+  };
+
+
+  const renderBidLabel = (bidCode) => {
+    const b = (bidCode || '').toLowerCase();
+    if (b === 'p') return 'Pass';
+    if (b === 'd') return 'X';
+    if (b === 'r') return 'XX';
+    if (!/^[1-7][cdhsn]$/.test(b)) return bidCode || '';
+    const level = b[0];
+    const strain = b[1];
+    const sym = (strain === 'c') ? '♣' : (strain === 'd') ? '♦' : (strain === 'h') ? '♥' : (strain === 's') ? '♠' : 'NT';
+    return `${level}${sym}`;
+  };
+
+  const renderDirectionLabel = (dir) => {
+    const d = (dir || '').toLowerCase();
+    if (d === 'n') return 'North';
+    if (d === 'e') return 'East';
+    if (d === 's') return 'South';
+    if (d === 'w') return 'West';
+    return dir || '';
+  };
+
+
   // Update structured auction when compact auction changes manually
   useEffect(() => {
-    if (auction && structuredAuction.length > 0) {
-      const compactAuction = structuredAuction.map(item => {
-        let result = item.bid;
-        if (item.alert) {
-          result += `(${item.alert})`;
-        }
-        if (item.annotation) {
-          result += `{${item.annotation}}`;
-        }
-        return result;
-      }).join('');
-      
-      if (compactAuction !== auction) {
-        // This means the user manually edited the auction input
-        const positions = ['w', 'n', 'e', 's'];
-        const dealerIndex = positions.indexOf(dealer.toLowerCase());
-        
-        // Parse the compact auction into structured format
-        const newStructuredAuction = [];
-        let currentIndex = dealerIndex;
-        
-        // Complex regex to match bids with potential alerts in parentheses and annotations in curly braces
-        const regex = /([1-7][cdhsn]|p|d|r)(?:\(([^)]*)\))?(?:\{([^}]*)\})?/g;
-        let match;
-        let auctionCopy = auction;
-        
-        while ((match = regex.exec(auctionCopy)) !== null) {
-          const [_, bid, alert, annotation] = match;
-          
-          newStructuredAuction.push({
-            direction: positions[currentIndex],
-            bid: bid,
-            alert: alert || '',
-            annotation: annotation || ''
-          });
-          
-          currentIndex = (currentIndex + 1) % 4;
-        }
-        
-        setStructuredAuction(newStructuredAuction);
-      }
-    }
-  }, [auction, dealer]);
-
-  // Generate the URL when inputs change
-  useEffect(() => {
     try {
-      let url = 'https://www.bridgebase.com/tools/handviewer.html?';
-      const params = [];
-      
-      // Add hands
-      const northHand = formatHand(hands.north);
-      const eastHand = formatHand(hands.east);
-      const southHand = formatHand(hands.south);
-      const westHand = formatHand(hands.west);
-      
-      if (northHand) params.push(`n=${northHand}`);
-      if (eastHand) params.push(`e=${eastHand}`);
-      if (southHand) params.push(`s=${southHand}`);
-      if (westHand) params.push(`w=${westHand}`);
-      
-      // Add names
-      if (names.north) params.push(`nn=${encodeURIComponent(names.north)}`);
-      if (names.east) params.push(`en=${encodeURIComponent(names.east)}`);
-      if (names.south) params.push(`sn=${encodeURIComponent(names.south)}`);
-      if (names.west) params.push(`wn=${encodeURIComponent(names.west)}`);
-      
-      // Add other parameters (only if they have values)
-      if (dealer) params.push(`d=${dealer}`);
-      if (vulnerability !== '-') params.push(`v=${vulnerability}`);
-      if (boardNumber) params.push(`b=${boardNumber}`);
-      if (kibitzer) params.push(`k=${kibitzer}`);
-      
-      // Process auction with annotations
-      if (auction) {
-        const processedAuction = processAnnotations(auction);
-        params.push(`a=${processedAuction}`);
-      }
-      
-      // Combine play sequence from all tricks and process annotations
-      const fullPlaySequence = playSequence.join('');
-      if (fullPlaySequence) {
-        // Ensure spaces in annotations are properly converted to %20
-        const processedPlaySequence = processAnnotations(fullPlaySequence);
-        params.push(`p=${processedPlaySequence}`);
-      }
-      
-      // Add claimed tricks if specified
-      if (claimedTricks) params.push(`c=${claimedTricks}`);
-      
-      // Combine parameters
-      url += params.join('&');
+      const baseUrl = 'https://www.bridgebase.com/tools/handviewer.html';
+
+      // Count played cards (ignoring annotations)
+      const countPlayedCards = () => {
+        const fullPlay = (playSequence || []).join('');
+        const re = /[shdc][akqjt98765432]/gi;
+        const m = fullPlay.match(re);
+        return m ? m.length : 0;
+      };
+      const playedCount = countPlayedCards();
+      const kibitzOn = kibitzer && String(kibitzer).trim() && ['n','s','e','w'].includes(String(kibitzer).trim().toLowerCase());
+
+      // Classic params: build manually (avoid URLSearchParams '+' spaces)
+      const encodeForHandviewer = (s) => {
+        return encodeURIComponent(String(s ?? ''))
+          .replace(/%7B/gi, '{')
+          .replace(/%7D/gi, '}')
+          .replace(/%28/gi, '(')
+          .replace(/%29/gi, ')');
+      };
+
+      // Decode any %xx inside {...} and (...) back to readable text, then re-encode once
+      const normalizeInnerEncoding = (text) => {
+        if (!text) return '';
+        return String(text)
+          .replace(/\{([^}]*)\}/g, (m, content) => {
+            try { return '{' + decodeURIComponent(content) + '}'; } catch { return m; }
+          })
+          .replace(/\(([^)]*)\)/g, (m, content) => {
+            try { return '(' + decodeURIComponent(content) + ')'; } catch { return m; }
+          });
+      };
+
+      const buildClassicUrl = () => {
+        const params = [];
+
+        const northHand = formatHand(hands.north);
+        const eastHand = formatHand(hands.east);
+        const southHand = formatHand(hands.south);
+        const westHand = formatHand(hands.west);
+
+        if (northHand) params.push(`n=${encodeForHandviewer(northHand)}`);
+        if (eastHand) params.push(`e=${encodeForHandviewer(eastHand)}`);
+        if (southHand) params.push(`s=${encodeForHandviewer(southHand)}`);
+        if (westHand) params.push(`w=${encodeForHandviewer(westHand)}`);
+
+        // Names (nn/sn/en/wn)
+        if (names.north) params.push(`nn=${encodeForHandviewer(names.north)}`);
+        if (names.south) params.push(`sn=${encodeForHandviewer(names.south)}`);
+        if (names.east) params.push(`en=${encodeForHandviewer(names.east)}`);
+        if (names.west) params.push(`wn=${encodeForHandviewer(names.west)}`);
+
+        if (dealer) params.push(`d=${encodeForHandviewer(dealer)}`);
+        if (vulnerability && vulnerability !== '-') params.push(`v=${encodeForHandviewer(vulnerability)}`);
+        if (boardNumber) params.push(`b=${encodeForHandviewer(boardNumber)}`);
+
+        if (kibitzOn) params.push(`k=${String(kibitzer).trim().toLowerCase()}`);
+
+        if (auction) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auction))}`);
+        const fullPlaySequence = (playSequence || []).join('');
+        if (fullPlaySequence) params.push(`p=${encodeForHandviewer(normalizeInnerEncoding(fullPlaySequence))}`);
+        // Claim (c=). Note: Handviewer will show all 4 hands if a claim is made before all 52 cards are played.
+        if (claimedTricks) params.push(`c=${encodeForHandviewer(claimedTricks)}`);
+
+        return `${baseUrl}?${params.join('&')}`;
+      };
+
+      const buildLinUrl = () => {
+        let lin = '';
+
+        // pn| in SWNE order (matches our LIN importer + common BBO exports)
+        const pn = [
+          names.south || 'South',
+          names.west || 'West',
+          names.north || 'North',
+          names.east || 'East'
+        ].join(',');
+        lin += `pn|${pn}|`;
+
+        // md| dealer index: 1=S,2=W,3=N,4=E; hands are SWNE
+        const dealerMap = { s: '1', w: '2', n: '3', e: '4' };
+        const dIdx = dealerMap[(dealer || 'n').toLowerCase()] || '3';
+
+        const handToLIN = (h) => {
+          const s = (h.spades || '').toUpperCase().replace(/[^AKQJT98765432]/g, '');
+          const hrt = (h.hearts || '').toUpperCase().replace(/[^AKQJT98765432]/g, '');
+          const d = (h.diamonds || '').toUpperCase().replace(/[^AKQJT98765432]/g, '');
+          const c = (h.clubs || '').toUpperCase().replace(/[^AKQJT98765432]/g, '');
+          return `S${s}H${hrt}D${d}C${c}`;
+        };
+
+        const nHand = handToLIN(hands.north);
+        const eHand = handToLIN(hands.east);
+        const sHand = handToLIN(hands.south);
+        const wHand = handToLIN(hands.west);
+
+        lin += `md|${dIdx}${sHand},${wHand},${nHand},${eHand}|`;
+
+        // sv| mapping
+        const vulMap = { 'none': 'o', '-': 'o', 'n': 'n', 'ns': 'n', 'e': 'e', 'ew': 'e', 'all': 'b', 'both': 'b', 'b': 'b', 'o': 'o' };
+        const sv = vulMap[(vulnerability || 'o').toLowerCase()] || 'o';
+        lin += `sv|${sv}|`;
+
+        if (boardNumber) lin += `ah|Board ${boardNumber}|`;
+
+        // Auction -> mb/an
+        const auctionTokens = [];
+        const reA = /([1-7][cdhsn]|p|d|r)(?:\(([^)]*)\))?(?:\{([^}]*)\})?/gi;
+        let am;
+        while ((am = reA.exec(auction || '')) !== null) {
+          auctionTokens.push({
+            bid: am[1].toLowerCase(),
+            alert: am[2] ? decodeURIComponent(am[2]) : '',
+            note: am[3] ? decodeURIComponent(am[3]) : ''
+          });
+        }
+
+        for (const t of auctionTokens) {
+          let bidOut = t.bid;
+          if (bidOut === 'p') bidOut = 'P';
+          else if (bidOut === 'd') bidOut = 'X';
+          else if (bidOut === 'r') bidOut = 'XX';
+          else bidOut = bidOut.toUpperCase();
+
+          lin += `mb|${bidOut}|`;
+          // In LIN: use an| for alerts (popup on bid), and at| for auction annotations (movie text)
+          if (t.alert && t.alert.trim()) lin += `an|${t.alert.trim()}|`;
+          if (t.note && t.note.trim()) {
+            lin += `nt|${t.note.trim()}|`;
+          }
+        }
+
+        // Play -> pc/nt
+        const fullPlay = (playSequence || []).join('');
+        const cardRe = /([shdc])([akqjt98765432])(\{[^}]*\})?/gi;
+        let cm;
+        while ((cm = cardRe.exec(fullPlay)) !== null) {
+          lin += `pc|${(cm[1] + cm[2]).toUpperCase()}|`;
+          if (cm[3]) {
+            const inside = cm[3].slice(1, -1);
+            try {
+              const note = decodeURIComponent(inside);
+              if (note.trim()) {
+                lin += `nt|${note.trim()}|`;
+              }
+            } catch {
+              if (inside.trim()) {
+                lin += `nt|${inside.trim()}|`;
+              }
+            }
+          }
+        }
+
+        // Claim -> mc (same kibitz rule)
+        if (!kibitzOn || playedCount >= 52) {
+          const ct = String(claimedTricks || '').trim();
+          if (ct) lin += `mc|${ct}|`;
+        }
+
+        const prefix = kibitzOn ? `k=${String(kibitzer).trim().toLowerCase()}&` : '';
+        return `${baseUrl}?${prefix}lin=${encodeURIComponent(lin)}`;
+      };
+
+      // Output: Classic only
+      const url = buildClassicUrl();
+
       setGeneratedUrl(url);
       setError('');
     } catch (err) {
@@ -1680,16 +2565,20 @@ const BridgeHandviewerApp = () => {
     const newPlaySequence = [...playSequence];
     newPlaySequence[trickIndex] = value;
     setPlaySequence(newPlaySequence);
+    setPlayRedoStack([]);
   };
 
   // Handle auction input change manually
   const handleAuctionChange = (e) => {
     setAuction(e.target.value);
+    setBidRedoStack([]);
   };
 
   // Handle undoing the last bid
   const handleUndoLastBid = () => {
     if (structuredAuction.length > 0) {
+      const removed = structuredAuction[structuredAuction.length - 1];
+      setBidRedoStack(prev => [...prev, removed]);
       const newStructuredAuction = [...structuredAuction];
       newStructuredAuction.pop();
       setStructuredAuction(newStructuredAuction);
@@ -1714,7 +2603,32 @@ const BridgeHandviewerApp = () => {
     }
   };
 
-  // Handle undoing the last card played
+  
+  // Handle redoing the last undone bid
+  const handleRedoLastBid = () => {
+    if (bidRedoStack.length === 0) return;
+
+    const redoBid = bidRedoStack[bidRedoStack.length - 1];
+    const newStack = [...bidRedoStack];
+    newStack.pop();
+    setBidRedoStack(newStack);
+
+    const newStructuredAuction = [...structuredAuction, redoBid];
+    setStructuredAuction(newStructuredAuction);
+
+    const compactAuction = newStructuredAuction.map(item => {
+      let result = item.bid;
+      if (item.alert) result += `(${item.alert})`;
+      if (item.annotation) result += `{${item.annotation}}`;
+      return result;
+    }).join('');
+
+    setAuction(compactAuction);
+    setAlertMessage('');
+    setBidAnnotation('');
+  };
+
+// Handle undoing the last card played
   const handleUndoLastCard = () => {
     // Find the last trick with cards
     let lastTrickIndex = -1;
@@ -1776,11 +2690,29 @@ const BridgeHandviewerApp = () => {
     if (lastCardStartPos >= 0) {
       // Remove the card and its annotation
       newPlaySequence[lastTrickIndex] = trick.substring(0, lastCardStartPos);
+      const removed = trick.substring(lastCardStartPos);
+      setPlayRedoStack(prev => [...prev, { trickIndex: lastTrickIndex, removed }]);
       setPlaySequence(newPlaySequence);
     }
   };
 
-  // Toggle bridge diagram visibility
+  
+  // Handle redoing the last undone card played
+  const handleRedoLastCard = () => {
+    if (playRedoStack.length === 0) return;
+
+    const action = playRedoStack[playRedoStack.length - 1];
+    const newStack = [...playRedoStack];
+    newStack.pop();
+    setPlayRedoStack(newStack);
+
+    const newPlaySequence = [...playSequence];
+    const current = newPlaySequence[action.trickIndex] || '';
+    newPlaySequence[action.trickIndex] = current + (action.removed || '');
+    setPlaySequence(newPlaySequence);
+  };
+
+// Toggle bridge diagram visibility
   const toggleBridgeDiagram = () => {
     setShowBridgeDiagram(!showBridgeDiagram);
   };
@@ -1884,19 +2816,8 @@ const BridgeHandviewerApp = () => {
       }
     }
     
-    // Set the hands
+    // Set the hands only (keep board number, dealer and vulnerability unchanged)
     setHands(playerHands);
-    
-    // Randomly set dealer
-    const dealerOptions = ['n', 'e', 's', 'w'];
-    setDealer(dealerOptions[Math.floor(Math.random() * 4)]);
-    
-    // Randomly set vulnerability
-    const vulOptions = ['-', 'n', 'e', 'b'];
-    setVulnerability(vulOptions[Math.floor(Math.random() * 4)]);
-    
-    // Set a random board number between 1 and 36
-    setBoardNumber(Math.floor(Math.random() * 36) + 1);
   };
 
   // Toggle help section
@@ -1915,9 +2836,89 @@ const BridgeHandviewerApp = () => {
     setShowBiddingBox(!showBiddingBox);
   };
 
+  
+  // Parse compact auction string (e.g. "1c(alert){note}p1d...") into structuredAuction
+  // This is used to ensure alerts/annotations are preserved even if the user edited the auction text manually.
+  const parseCompactAuctionString = (auctionStr, dealerChar) => {
+    const s = (auctionStr || '').trim();
+    if (!s) return [];
+    const positions = ['w', 'n', 'e', 's'];
+    const dealerIdx = Math.max(0, positions.indexOf((dealerChar || 'n').toLowerCase()));
+    let i = 0;
+    let bidIndex = 0;
+    const out = [];
+
+    const readUntil = (endCh) => {
+      let start = i;
+      let depth = 0;
+      // assume current char is the opener
+      i++; // skip opener
+      start = i;
+      while (i < s.length) {
+        const ch = s[i];
+        if (ch === endCh && depth === 0) {
+          const val = s.slice(start, i);
+          i++; // consume end
+          return val;
+        }
+        // no nesting expected, but handle escaped endCh minimally
+        i++;
+      }
+      // if no closing found, take rest
+      return s.slice(start);
+    };
+
+    while (i < s.length) {
+      // skip whitespace just in case
+      while (i < s.length && /\s/.test(s[i])) i++;
+      if (i >= s.length) break;
+
+      let bid = '';
+      const ch = s[i];
+
+      // bids are: p/d/r OR level+suit (1-7 + c/d/h/s/n)
+      if (ch === 'p' || ch === 'P') { bid = 'p'; i += 1; }
+      else if (ch === 'd' || ch === 'D' || ch === 'x' || ch === 'X') { bid = 'd'; i += 1; }
+      else if (ch === 'r' || ch === 'R') { bid = 'r'; i += 1; }
+      else if (/[1-7]/.test(ch) && i + 1 < s.length && /[cdhsnCDHSN]/.test(s[i + 1])) {
+        bid = (s[i] + s[i + 1]).toLowerCase();
+        i += 2;
+      } else {
+        // Unknown char, skip to avoid infinite loop
+        i += 1;
+        continue;
+      }
+
+      // optional alert ( ... )
+      let alert = '';
+      if (i < s.length && s[i] === '(') {
+        alert = (readUntil(')') || '').trim();
+      }
+
+      // optional annotation { ... }
+      let annotation = '';
+      if (i < s.length && s[i] === '{') {
+        annotation = (readUntil('}') || '').trim();
+      }
+
+      const direction = positions[(dealerIdx + bidIndex) % 4];
+      out.push({ direction, bid, alert, annotation });
+      bidIndex++;
+    }
+
+    return out;
+  };
+
   // Generate PBN format
   const generatePBN = () => {
     try {
+      // Use parsed auction from the compact auction string when available,
+      // to ensure all alerts/annotations are exported even after manual edits.
+      const parsedAuction = parseCompactAuctionString(auction, dealer);
+      const structuredAuctionForExport = (parsedAuction.length >= (structuredAuction?.length || 0))
+        ? parsedAuction
+        : (structuredAuction || []);
+
       let pbn = '';
       
       // Add PBN version indicator
@@ -1990,16 +2991,16 @@ const BridgeHandviewerApp = () => {
       
       // Declarer tag
       let declarerValue = '';
-      if (structuredAuction.length > 0) {
+      if (structuredAuctionForExport.length > 0) {
         // Find the last non-pass bid to determine declarer
-        const lastBid = structuredAuction.slice().reverse().find(bid => 
+        const lastBid = structuredAuctionForExport.slice().reverse().find(bid => 
           bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
         );
         if (lastBid) {
           // Find the first player on this side to bid this strain
           const strain = lastBid.bid[1];
           const side = lastBid.direction === 'n' || lastBid.direction === 's' ? ['n', 's'] : ['e', 'w'];
-          const firstBidder = structuredAuction.find(bid => 
+          const firstBidder = structuredAuctionForExport.find(bid => 
             bid.bid.length >= 2 && bid.bid[1] === strain && side.includes(bid.direction)
           );
           if (firstBidder) {
@@ -2011,22 +3012,22 @@ const BridgeHandviewerApp = () => {
       
       // Contract tag
       let contractValue = '';
-      if (structuredAuction.length > 0) {
+      if (structuredAuctionForExport.length > 0) {
         // Check if all passed
-        const allPassed = structuredAuction.every(bid => bid.bid === 'p');
+        const allPassed = structuredAuctionForExport.every(bid => bid.bid === 'p');
         if (allPassed) {
           contractValue = 'Pass';
         } else {
           // Find the last non-pass bid
-          const lastBid = structuredAuction.slice().reverse().find(bid => 
+          const lastBid = structuredAuctionForExport.slice().reverse().find(bid => 
             bid.bid !== 'p' && bid.bid !== 'd' && bid.bid !== 'r'
           );
           if (lastBid) {
             let contract = lastBid.bid.toUpperCase();
             
             // Check for doubles/redoubles after this bid
-            const lastBidIndex = structuredAuction.lastIndexOf(lastBid);
-            const afterBids = structuredAuction.slice(lastBidIndex + 1);
+            const lastBidIndex = structuredAuctionForExport.lastIndexOf(lastBid);
+            const afterBids = structuredAuctionForExport.slice(lastBidIndex + 1);
             
             let doubled = false;
             let redoubled = false;
@@ -2052,25 +3053,41 @@ const BridgeHandviewerApp = () => {
       pbn += '[Result ""]\n';
       
       // Add auction section if present
-      if (structuredAuction.length > 0) {
+      if (structuredAuctionForExport.length > 0) {
         pbn += `[Auction "${dealer.toUpperCase()}"]\n`;
-        
+
+        // Build alert notes (PBN Notes) for maximum compatibility:
+        // - In the Auction, append " =n=" after the bid
+        // - Then add [Note "n:..."] tags below
+        const noteNumberByBidIndex = {};
+        const alertNotes = [];
+        structuredAuctionForExport.forEach((bidInfo, idx) => {
+          const a = (bidInfo.alert || '').trim();
+          if (a) {
+            const n = alertNotes.length + 1;
+            noteNumberByBidIndex[idx] = n;
+            alertNotes.push({ n, text: a });
+          }
+        });
+
         // Group bids by 4
         let auctionLine = '';
         let bidCount = 0;
-        
-        for (const bidInfo of structuredAuction) {
+
+        for (let i = 0; i < structuredAuctionForExport.length; i++) {
+          const bidInfo = structuredAuctionForExport[i];
           let bidText = bidInfo.bid.toUpperCase();
           if (bidInfo.bid === 'p') bidText = 'Pass';
-          
-          // Add alert as note if present
-          if (bidInfo.alert) {
-            bidText += ` =${bidCount + 1}=`;
-          }
-          
+          else if (bidInfo.bid === 'd') bidText = 'X';
+          else if (bidInfo.bid === 'r') bidText = 'XX';
+
+          // Add alert note marker if present
+          const noteNo = noteNumberByBidIndex[i];
+          if (noteNo) bidText += `=${noteNo}=`;
+
           auctionLine += bidText;
           bidCount++;
-          
+
           if (bidCount % 4 === 0) {
             pbn += auctionLine + '\n';
             auctionLine = '';
@@ -2078,21 +3095,18 @@ const BridgeHandviewerApp = () => {
             auctionLine += '\t';
           }
         }
-        
+
         if (auctionLine.trim()) {
           pbn += auctionLine.trim() + '\n';
         }
-        
-        // Add note explanations
-        let noteIndex = 1;
-        for (const bidInfo of structuredAuction) {
-          if (bidInfo.alert) {
-            pbn += `[Note "${noteIndex}:${bidInfo.alert}"]\n`;
-            noteIndex++;
-          }
+
+        // Add note explanations (only alerts; annotations are stored in app metadata below)
+        for (const n of alertNotes) {
+          // Keep it simple: "index:text"
+          pbn += `[Note "${n.n}:${n.text.replace(/"/g, "'")}"]\n`;
         }
       }
-      
+
       // Add play section if present
       const hasPlay = playSequence.some(trick => trick !== '');
       if (hasPlay) {
@@ -2121,6 +3135,36 @@ const BridgeHandviewerApp = () => {
         }
       }
       
+      // --- BridgeHandviewer app metadata (for round-trip import) ---
+      // Stored as comment lines so other PBN tools should ignore it safely.
+      try {
+        const meta = {
+          app: "BridgeHandviewerApp",
+          version: 1,
+          names,
+          dealer,
+          vulnerability,
+          boardNumber,
+          claimedTricks,
+          structuredAuctionForExport,
+          playSequence
+        };
+
+        const json = JSON.stringify(meta);
+
+        // Base64 encode UTF-8 safely
+        const b64 = btoa(unescape(encodeURIComponent(json)));
+
+        pbn += `%BHVA-BEGIN\n`;
+        // Split into chunks so no single line gets too long
+        for (let i = 0; i < b64.length; i += 76) {
+          pbn += `%BHVA:${b64.slice(i, i + 76)}\n`;
+        }
+        pbn += `%BHVA-END\n`;
+      } catch (e) {
+        // If encoding fails, skip metadata (PBN stays valid)
+      }
+
       pbn += '\n';
       
       return pbn;
@@ -2150,10 +3194,479 @@ const BridgeHandviewerApp = () => {
     }
   };
 
+
+
+  // Generate LIN format (BBO Handviewer compatible)
+  const generateLIN = () => {
+    try {
+      // Helper: convert our hand object to LIN hand string (S...H...D...C...)
+      const normRanks = (s) => (s || '').toUpperCase().replace(/10/g, 'T');
+
+      const encodeHandLIN = (hand) => {
+        const sp = normRanks(hand?.spades);
+        const he = normRanks(hand?.hearts);
+        const di = normRanks(hand?.diamonds);
+        const cl = normRanks(hand?.clubs);
+        return `S${sp}H${he}D${di}C${cl}`;
+      };
+
+      // Dealer mapping: 1=S, 2=W, 3=N, 4=E
+      const dealerMap = { s: '1', w: '2', n: '3', e: '4' };
+      const dealerNum = dealerMap[(dealer || 'n').toLowerCase()] || '3';
+
+      // Names in LIN are South, West, North, East
+      // IMPORTANT: Do NOT URL-encode spaces (e.g., %20). BBO import expects plain text.
+      // Also, LIN uses '|' and ',' as separators, so strip those from names.
+      const safeName = (v) =>
+        (v || '')
+          .toString()
+          .replace(/[|]/g, ' ')
+          .replace(/,/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const pn = [
+        safeName(names?.south),
+        safeName(names?.west),
+        safeName(names?.north),
+        safeName(names?.east)
+      ].join(',');
+
+      // Hands in LIN are South, West, North, East
+      const mdHands = [
+        encodeHandLIN(hands?.south),
+        encodeHandLIN(hands?.west),
+        encodeHandLIN(hands?.north),
+        encodeHandLIN(hands?.east)
+      ].join(',');
+
+      // Vulnerability: o (none), n (NS), e (EW), b (both)
+      const vulMap = { '-': 'o', 'n': 'n', 'e': 'e', 'b': 'b' };
+      const sv = vulMap[(vulnerability || '-').toLowerCase()] || 'o';
+
+      // Auction: rebuild from compact auction string so alerts aren't lost after edits
+      const parsedAuction = parseCompactAuctionString(auction, dealer);
+      const structuredAuctionForExport = (parsedAuction.length >= (structuredAuction?.length || 0))
+        ? parsedAuction
+        : (structuredAuction || []);
+
+      let lin = '';
+      lin += `pn|${pn}|`;
+      lin += `md|${dealerNum}${mdHands}|`;
+      lin += `sv|${sv}|`;
+      if (boardNumber) lin += `ah|Board ${String(boardNumber)}|`;
+
+      // Auction tokens
+      structuredAuctionForExport.forEach((b) => {
+        const bid = (b?.bid || '').toLowerCase();
+        if (!bid) return;
+
+        // BBO expects mb values like p/d/r or 1c/1d/1h/1s/1n
+        let mb = bid;
+        if (bid === 'x') mb = 'd';
+        if (bid === 'xx') mb = 'r';
+
+        lin += `mb|${mb}|`;
+
+        // Prefer alert, but if only annotation exists, include that too
+        const a1 = (b?.alert || '').trim();
+        const a2 = (b?.annotation || '').trim();
+        const expl = (a1 && a2) ? `${a1} | ${a2}` : (a1 || a2);
+
+        if (expl) {
+          lin += `an|${encodeURIComponent(expl)}|`;
+        }
+      });
+
+      // Play tokens (pc)
+      const toBboCard = (code) => {
+        if (!code || code.length < 2) return '';
+        const suit = code[0].toUpperCase(); // s/h/d/c
+        let rank = code[1];
+        // allow 10 encoded as 't'
+        const rankMap = { a: 'A', k: 'K', q: 'Q', j: 'J', t: 'T' };
+        rank = rankMap[rank.toLowerCase()] || rank.toUpperCase();
+        const suitMap = { S: 'S', H: 'H', D: 'D', C: 'C', s: 'S', h: 'H', d: 'D', c: 'C' };
+        return `${suitMap[suit] || suit}${rank}`;
+      };
+
+      // playSequence is array of 13 trick strings (may include annotations)
+      const allCards = [];
+      (playSequence || []).forEach((trickStr) => {
+        const codes = extractCardCodes(String(trickStr || ''));
+        codes.forEach((c) => allCards.push(c));
+      });
+
+      allCards.forEach((c) => {
+        const card = toBboCard(c);
+        if (card) lin += `pc|${card}|`;
+      });
+
+      return lin;
+    } catch (err) {
+      setError(`Failed to generate LIN: ${err.message}`);
+      return '';
+    }
+  };
+
+  // Download LIN file
+  const downloadLIN = () => {
+    try {
+      const linContent = generateLIN();
+      if (!linContent) return;
+
+      const blob = new Blob([linContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `board${boardNumber || 'deal'}.lin`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(`Failed to download LIN: ${err.message}`);
+    }
+  };
   // Directions in the correct order: North, East, South, West
   const directions = ['north', 'east', 'south', 'west'];
 
-  return (
+  // --- Turn order enforcement for play sequence ---
+  const dirShortToLong = { n: 'north', e: 'east', s: 'south', w: 'west' };
+  const playOrder = ['north', 'east', 'south', 'west']; // clockwise
+
+  const nextClockwise = (dirLong) => {
+    const i = playOrder.indexOf(dirLong);
+    return playOrder[(i + 1) % 4];
+  };
+
+  // Determine final contract + declarer from the structured auction
+  const getContractInfo = (structuredAuction) => {
+    if (!structuredAuction || structuredAuction.length === 0) return null;
+
+    const lastNormal = [...structuredAuction].reverse().find(b => b.bid && b.bid !== 'p' && b.bid !== 'd' && b.bid !== 'r');
+    if (!lastNormal || !lastNormal.bid || lastNormal.bid.length < 2) return null;
+
+    const strain = lastNormal.bid[1]; // c/d/h/s/n
+    const side = (lastNormal.direction === 'n' || lastNormal.direction === 's') ? 'ns' : 'ew';
+
+    // Declarer = first player on that side who bid that strain
+    const firstBidder = structuredAuction.find(b =>
+      b.bid && b.bid.length === 2 &&
+      b.bid[1] === strain &&
+      ((side === 'ns' && (b.direction === 'n' || b.direction === 's')) ||
+       (side === 'ew' && (b.direction === 'e' || b.direction === 'w')))
+    );
+
+    const declarerShort = firstBidder ? firstBidder.direction : lastNormal.direction;
+    const declarer = dirShortToLong[declarerShort] || 'north';
+
+    return { trump: strain, declarer };
+  };
+
+  const rankValue = (r) => {
+    const m = { a: 14, k: 13, q: 12, j: 11, t: 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3, '2': 2 };
+    return m[r] || 0;
+  };
+
+  // Given a trick string, leader dir, and trump, return winning dir
+  const getTrickWinner = (trickString, leaderDir, trump) => {
+    const cards = extractCardCodes(trickString || '');
+    if (cards.length === 0) return leaderDir;
+
+    const leadSuit = cards[0][0];
+    const trumpSuit = (trump && trump !== 'n') ? trump : null;
+
+    let winningIndex = 0;
+    const isTrump = (c) => trumpSuit && c[0] === trumpSuit;
+    const anyTrumpPlayed = trumpSuit ? cards.some(isTrump) : false;
+
+    for (let i = 1; i < cards.length; i++) {
+      const c = cards[i];
+      const w = cards[winningIndex];
+
+      if (anyTrumpPlayed) {
+        if (isTrump(c) && !isTrump(w)) winningIndex = i;
+        else if (isTrump(c) && isTrump(w) && rankValue(c[1]) > rankValue(w[1])) winningIndex = i;
+      } else {
+        if (c[0] === leadSuit && w[0] === leadSuit) {
+          if (rankValue(c[1]) > rankValue(w[1])) winningIndex = i;
+        } else if (c[0] === leadSuit && w[0] !== leadSuit) {
+          winningIndex = i;
+        }
+      }
+    }
+
+    const leaderIndex = playOrder.indexOf(leaderDir);
+    return playOrder[(leaderIndex + winningIndex) % 4];
+  };
+
+  // Compute whose turn it is to play next, and who is leading the current trick
+  // Also compute which trick should be displayed on the table (keep last completed trick visible).
+  const computeTurnState = (playSequence, contractInfo) => {
+    if (!contractInfo) return { toAct: null, leader: null, displayIndex: -1, displayLeader: null };
+
+    const opener = nextClockwise(contractInfo.declarer); // opening lead = LHO of declarer
+    let leader = opener;
+
+    let lastNonEmpty = -1;
+    let leaderAtLastNonEmpty = opener;
+
+    for (let t = 0; t < 13; t++) {
+      const trick = playSequence[t] || '';
+      const cards = extractCardCodes(trick);
+
+      // Track last non-empty trick and its leader-at-start
+      if (cards.length > 0) {
+        lastNonEmpty = t;
+        leaderAtLastNonEmpty = leader;
+      }
+
+      // Empty trick -> next to act is the leader (new trick)
+      if (cards.length === 0) {
+        return {
+          toAct: leader,
+          leader,
+          displayIndex: lastNonEmpty,
+          displayLeader: lastNonEmpty >= 0 ? leaderAtLastNonEmpty : leader
+        };
+      }
+
+      // In-progress trick
+      if (cards.length < 4) {
+        const leaderIndex = playOrder.indexOf(leader);
+        return {
+          toAct: playOrder[(leaderIndex + cards.length) % 4],
+          leader,
+          displayIndex: t,
+          displayLeader: leader
+        };
+      }
+
+      // Completed trick -> next trick leader is the winner
+      leader = getTrickWinner(trick, leader, contractInfo.trump);
+    }
+
+    return { toAct: null, leader: null, displayIndex: lastNonEmpty, displayLeader: leaderAtLastNonEmpty };
+  };
+
+
+
+
+
+  // ---- Annotation helpers (Phase 1: parse & edit annotations inside playSequence) ----
+  const safeDecode = (s) => {
+    try { return decodeURIComponent(s || ''); } catch (_) { return (s || '').replace(/%20/g, ' '); }
+  };
+
+  const parseTrickCardsWithAnnotations = (trickStr) => {
+    const cards = [];
+    let i = 0;
+    const s = trickStr || '';
+    while (i < s.length) {
+      if (i + 1 < s.length) {
+        const suitCode = s[i];
+        const rankCode = s[i + 1];
+        if (['s','h','d','c'].includes(suitCode) &&
+            ['a','k','q','j','t','9','8','7','6','5','4','3','2'].includes((rankCode || '').toLowerCase())) {
+
+          i += 2;
+
+          let rawAnn = '';
+          if (i < s.length && s[i] === '{') {
+            const start = i + 1;
+            while (i < s.length && s[i] !== '}') i++;
+            const end = i;
+            rawAnn = s.substring(start, end);
+            if (i < s.length && s[i] === '}') i++;
+          }
+
+          cards.push({
+            suitCode,
+            rankCode: (rankCode || '').toLowerCase(),
+            rawAnn,
+            annText: rawAnn ? safeDecode(rawAnn) : ''
+          });
+          continue;
+        }
+      }
+
+      // Skip stray annotations or chars
+      if (s[i] === '{') {
+        while (i < s.length && s[i] !== '}') i++;
+        if (i < s.length) i++;
+      } else {
+        i++;
+      }
+    }
+    return cards;
+  };
+
+  const suitSymbolFromCode = (c) => (c === 's' ? '♠' : c === 'h' ? '♥' : c === 'd' ? '♦' : c === 'c' ? '♣' : '?');
+  const rankSymbolFromCode = (r) => (r === 'a' ? 'A' : r === 'k' ? 'K' : r === 'q' ? 'Q' : r === 'j' ? 'J' : r === 't' ? 'T' : (r || '').toUpperCase());
+
+  const computeTrickLeadersAtStart = (playSequence, contractInfo) => {
+    if (!contractInfo) return Array(13).fill('north');
+    const leaders = [];
+    let leader = nextClockwise(contractInfo.declarer); // opening lead = LHO of declarer
+    for (let t = 0; t < 13; t++) {
+      leaders[t] = leader;
+      const trick = playSequence[t] || '';
+      const codes = extractCardCodes(trick);
+      if (codes.length === 4) {
+        leader = getTrickWinner(trick, leader, contractInfo.trump);
+      } else {
+        // trick not complete: leader for later tricks is unknown yet, but we keep current leader
+      }
+    }
+    return leaders;
+  };
+
+  const computeAnnotatedPlays = (playSequence, contractInfo) => {
+    if (!contractInfo) return [];
+    const leaders = computeTrickLeadersAtStart(playSequence, contractInfo);
+    const out = [];
+
+    for (let t = 0; t < 13; t++) {
+      const trickStr = playSequence[t] || '';
+      const cards = parseTrickCardsWithAnnotations(trickStr);
+      if (!cards.length) continue;
+
+      const leader = leaders[t];
+      const leaderIndex = playOrder.indexOf(leader);
+
+      cards.forEach((c, i) => {
+        if (!c.rawAnn) return;
+        const seat = playOrder[(leaderIndex + i) % 4];
+        const suitSym = suitSymbolFromCode(c.suitCode);
+        const rankSym = rankSymbolFromCode(c.rankCode);
+        out.push({
+          key: `${t}-${i}`,
+          trickIndex: t,
+          cardIndex: i,
+          seat,
+          suitSym,
+          rankSym,
+          isRed: suitSym === '♥' || suitSym === '♦',
+          text: c.annText
+        });
+      });
+    }
+
+    // Already in trick order by construction
+    return out;
+  };
+
+  const updatePlayAnnotation = (trickIndex, cardIndex, newText) => {
+    setPlaySequence(prev => {
+      const next = [...prev];
+      const trickStr = next[trickIndex] || '';
+      const cards = parseTrickCardsWithAnnotations(trickStr);
+
+      if (cardIndex < 0 || cardIndex >= cards.length) return prev;
+
+      const trimmed = (newText || '');
+      cards[cardIndex].rawAnn = trimmed ? encodeURIComponent(trimmed) : '';
+
+      // Rebuild trick string
+      const rebuilt = cards.map(c => {
+        const cc = `${c.suitCode}${c.rankCode}`;
+        return c.rawAnn ? `${cc}{${c.rawAnn}}` : cc;
+      }).join('');
+
+      next[trickIndex] = rebuilt;
+      return next;
+    });
+  };
+
+  // Build a handviewer-style contract label (e.g. 3♣ X W)
+  const getContractDisplay = (structuredAuction) => {
+    if (!structuredAuction || structuredAuction.length === 0) return '';
+    const lastNormalIndex = [...structuredAuction].map((b, i) => ({ b, i }))
+      .reverse()
+      .find(x => x.b && x.b.bid && x.b.bid !== 'p' && x.b.bid !== 'd' && x.b.bid !== 'r' && x.b.bid.length >= 2);
+    if (!lastNormalIndex) return '';
+    const lastNormal = lastNormalIndex.b;
+    const level = lastNormal.bid[0];
+    const strain = lastNormal.bid[1];
+
+    const strainSymbol =
+      strain === 'c' ? '♣' :
+      strain === 'd' ? '♦' :
+      strain === 'h' ? '♥' :
+      strain === 's' ? '♠' : 'NT';
+
+    // Doubling status after the last normal bid
+    const after = structuredAuction.slice(lastNormalIndex.i + 1);
+    const isRedoubled = after.some(x => x.bid === 'r');
+    const isDoubled = after.some(x => x.bid === 'd');
+    const dbl = isRedoubled ? 'XX' : (isDoubled ? 'X' : '');
+
+    // Declarer = first player on that side who bid the strain
+    const side = (lastNormal.direction === 'n' || lastNormal.direction === 's') ? ['n', 's'] : ['e', 'w'];
+    const firstBidder = structuredAuction.find(b =>
+      b && b.bid && b.bid.length === 2 && b.bid[1] === strain && side.includes(b.direction)
+    );
+    const declarer = (firstBidder ? firstBidder.direction : lastNormal.direction || 'n').toUpperCase();
+
+    return `${level}${strainSymbol}${dbl ? ' ' + dbl : ''} ${declarer}`.trim();
+  };
+
+  const computeTrickCounts = (playSequence, contractInfo) => {
+    if (!contractInfo) return { ns: 0, ew: 0 };
+    const opener = nextClockwise(contractInfo.declarer);
+    let leader = opener;
+
+    let ns = 0;
+    let ew = 0;
+
+    for (let t = 0; t < 13; t++) {
+      const trick = playSequence[t] || '';
+      const cards = extractCardCodes(trick);
+      if (cards.length < 4) break; // only count completed tricks in order
+      const winner = getTrickWinner(trick, leader, contractInfo.trump);
+      if (winner === 'north' || winner === 'south') ns++;
+      else ew++;
+      leader = winner;
+    }
+
+    return { ns, ew };
+  };
+
+  const contractInfo = getContractInfo(structuredAuction);
+  const contractDisplay = getContractDisplay(structuredAuction);
+  const trickCounts = computeTrickCounts(playSequence, contractInfo);
+  const turnState = computeTurnState(playSequence, contractInfo);
+  const currentToAct = turnState.toAct;
+  const currentTrickLeader = turnState.leader;
+  const displayTrickLeader = turnState.displayLeader;
+  const displayTrickIndex = turnState.displayIndex;
+  const annotatedPlays = computeAnnotatedPlays(playSequence, contractInfo);
+
+  const playGridRows = Array.from({ length: 13 }).map((_, trickIndex) => {
+    const cards = parseTrickCardsWithAnnotations(playSequence[trickIndex] || '');
+    return {
+      trickIndex,
+      cards: Array.from({ length: 4 }).map((__, cardIndex) => {
+        const c = cards[cardIndex];
+        if (!c) return null;
+        const suitMap = { s: '♠', h: '♥', d: '♦', c: '♣' };
+        const suitSym = suitMap[c.suitCode] || '?';
+        const rankSym = (c.rankCode || '').toUpperCase();
+        const text = c.annText || '';
+        return {
+          trickIndex,
+          cardIndex,
+          suitSym,
+          rankSym,
+          text,
+          isRed: suitSym === '♥' || suitSym === '♦',
+          isAnnotated: !!text
+        };
+      })
+    };
+  });
+return (
     <div className="p-4 bg-gray-50 min-h-screen">
       <div className="max-w-4xl mx-auto bg-white rounded-lg shadow">
         <div className="p-4">
@@ -2162,12 +3675,16 @@ const BridgeHandviewerApp = () => {
             <div className="flex space-x-2">
               <button
                 onClick={toggleHelp}
-                className="h-8 w-8 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200"
+                className="h-8 w-8 flex items-center justify-center text-gray-500 hover:text-blue-600 transition"
                 aria-label="Information"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9z" clipRule="evenodd" />
-                </svg>
+                
+<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <circle cx="12" cy="12" r="9" strokeWidth="2"/>
+  <line x1="12" y1="10" x2="12" y2="16" strokeWidth="2"/>
+  <circle cx="12" cy="7" r="1"/>
+</svg>
+
               </button>
               <button
                 onClick={() => setShowImport(!showImport)}
@@ -2195,14 +3712,16 @@ const BridgeHandviewerApp = () => {
           {showImport && (
             <div className="mb-4 bg-purple-50 p-3 rounded-md">
               <h3 className="text-md font-medium text-purple-800 mb-2">Import from BBO/Intobridge</h3>
-              <div className="flex gap-2">
+
+              <div className="flex gap-2 items-center">
                 <input
                   type="text"
                   value={importUrl}
                   onChange={(e) => setImportUrl(e.target.value)}
                   placeholder="https://www.bridgebase.com/tools/handviewer.html?lin=..."
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                  className="flex-1 h-8 px-2 py-0.5 text-sm border border-gray-300 rounded-md"
                 />
+
                 <button
                   onClick={handleImportUrl}
                   className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition"
@@ -2210,20 +3729,45 @@ const BridgeHandviewerApp = () => {
                   Import
                 </button>
               </div>
+
+              <div className="mt-3">
+                <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
+                  <span>Or upload a PBN:</span>
+                  <label
+                    htmlFor="pbnUpload"
+                    className="inline-flex items-center justify-center px-3 py-1 text-sm font-medium border border-gray-300 rounded-md bg-white hover:bg-gray-50 cursor-pointer"
+                  >
+                    Choose a file
+                  </label>
+                </div>
+
+                <input
+                  id="pbnUpload"
+                  type="file"
+                  accept=".pbn,.txt"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files && e.target.files[0];
+                    if (f) handleImportFile(f);
+                    // allow re-selecting same file
+                    e.target.value = '';
+                  }}
+                />
+
+                
+              </div>
             </div>
           )}
-          
+
           {showHelp && (
             <div className="mb-4 bg-blue-50 p-3 rounded-md">
               <h3 className="text-md font-medium text-blue-800 mb-2">How to Use</h3>
               <ol className="list-decimal pl-5 text-sm text-gray-700 space-y-1">
-                <li>Enter the cards for each suit using standard notation (A, K, Q, J, T, 9, 8, 7, 6, 5, 4, 3, 2) or alternative symbols (/, *, -, +, 1 for A, K, Q, J, 10), or use the card picker to add cards by clicking</li>
-                <li>Set the dealer, vulnerability and other options as needed</li>
-                <li>You can use the bidding box to enter an auction by clicking on the bids, or type directly in the auction field</li>
-                <li>Add bid annotations in the Annotation textarea before making a bid</li>
-                <li>You can use the bridge diagram to enter card plays by clicking on the cards, or type directly in the play sequence fields</li>
-                <li>Add card annotations in the Card Annotation textarea before playing a card</li>
-                <li>The URL will be generated automatically as you type</li>
+                <li>Enter the cards for each suit using standard notation (A, K, Q, J, T, 9, 8, 7, 6, 5, 4, 3, 2) or alternative symbols (/, *, -, +, 1 for A, K, Q, J, 10), or use the card picker to add cards by clicking. You can also generate a random deal, or import a BBO Handviewer link, IntoBridge link, or PBN. Cards can be dragged between hands in the play diagram to swap them.</li>
+                <li>Set the board number, dealer, and vulnerability.</li>
+                <li>Create the auction, alerts and annotations: open the Bidding Box and select bids. Type an Alert before making a bid, or click a bid in the auction table to add or edit an alert. Add annotations for extra commentary. Use Undo/Redo to adjust the auction.</li>
+                <li>Enter the play: show the play diagram and click cards to play them. Use Undo/Redo to adjust the play. You can also add annotations to played cards.</li>
+                <li>Export: generate a BBO Handviewer link, Bridge Winners Embed Code, or download the deal as PBN or LIN.</li>
               </ol>
             </div>
           )}
@@ -2344,6 +3888,7 @@ const BridgeHandviewerApp = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Dealer</label>
                     <select
+                      disabled={!!dealerFromBoardNumber(boardNumber)}
                       value={dealer}
                       onChange={(e) => {
                         setDealer(e.target.value);
@@ -2351,7 +3896,7 @@ const BridgeHandviewerApp = () => {
                         setAuction('');
                         setStructuredAuction([]);
                       }}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                     >
                       <option value="n">North</option>
                       <option value="e">East</option>
@@ -2363,9 +3908,10 @@ const BridgeHandviewerApp = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Vulnerability</label>
                     <select
+                      disabled={!!vulFromBoardNumber(boardNumber)}
                       value={vulnerability}
                       onChange={(e) => setVulnerability(e.target.value)}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                     >
                       <option value="-">None</option>
                       <option value="n">N-S</option>
@@ -2378,9 +3924,19 @@ const BridgeHandviewerApp = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Board Number</label>
                     <input
                       type="number"
+                      min="1"
                       value={boardNumber}
-                      onChange={(e) => setBoardNumber(e.target.value)}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') {
+                        setBoardNumber('');
+                        return;
+                      }
+                      const n = parseInt(raw, 10);
+                      if (!Number.isFinite(n)) return;
+                      setBoardNumber(String(Math.max(1, n)));
+                    }}
+                      className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                       placeholder="Board number (optional)"
                     />
                   </div>
@@ -2415,13 +3971,13 @@ const BridgeHandviewerApp = () => {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-600 mb-1">Format: 1sp3ndrppp</p>
                     <input
                       type="text"
                       value={auction}
                       onChange={handleAuctionChange}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                      placeholder="Bidding sequence"
+                      placeholder="Format: 1sp3ndrppp"
+                      className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      
                     />
                   </div>
                 </div>
@@ -2432,67 +3988,354 @@ const BridgeHandviewerApp = () => {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gridGap: '1rem' }}>
                         {/* Bidding box in left column */}
                         <div>
-                          <h4 className="text-sm font-medium mb-2">Bidding Box</h4>
-                          <BiddingBox
+                                                    <BiddingBox
                             onBidSelected={handleBidSelected}
                             currentAuction={structuredAuction}
                             dealer={dealer}
                             onUndoLastBid={handleUndoLastBid}
+            onRedoLastBid={handleRedoLastBid}
+            canRedoLastBid={bidRedoStack.length > 0}
                             alertMessage={alertMessage}
                             setAlertMessage={setAlertMessage}
                             bidAnnotation={bidAnnotation}
                             setBidAnnotation={setBidAnnotation}
                           />
-                        </div>
+</div>
                         
                         {/* Auction table in right column */}
                         <div>
-                          <h4 className="text-sm font-medium mb-2">Auction</h4>
-                          <AuctionTable
+                                                    <AuctionTable
                             structuredAuction={structuredAuction}
                             dealer={dealer}
+                            onEditBidAlert={updateBidAlertAt}
+                            onEditBidAnnotation={updateBidAnnotationAt}
                           />
                           <div className="mt-2 text-sm">
-                            <span className="text-red-500">*</span> = Alert &nbsp;
-                            <span className="text-blue-500">†</span> = Annotation
+                            <span className="text-red-500">*</span> = Alert &nbsp; 
+                        {/* Alerts panel */}
+                        <details className="mt-3 border border-gray-200 rounded-md bg-white p-2">
+                          <summary className="cursor-pointer select-none text-sm font-medium">
+                            Alerts ({(structuredAuction || []).filter(x => (x.alert || '').trim()).length})
+                          </summary>
+
+                          <div className="mt-2 space-y-2">
+                            {(structuredAuction || [])
+                              .map((x, i) => ({...x, _i: i}))
+                              .filter(x => (x.alert || '').trim())
+                              .length === 0 ? (
+                                <div className="text-sm text-gray-500">No alerts.</div>
+                              ) : (
+                                (structuredAuction || [])
+                                  .map((x, i) => ({...x, _i: i}))
+                                  .filter(x => (x.alert || '').trim())
+                                  .map(x => (
+                                    <div key={`bid-alert-${x._i}`} className="border border-gray-100 rounded-md p-2 resize overflow-auto flex flex-col">
+                                      <div className="text-xs text-gray-600 mb-1">
+
+                                        <span className={(String(x.bid || '').includes('h') || String(x.bid || '').includes('d')) ? 'text-red-600 font-medium' : 'font-medium'}>
+                                          {renderBidLabel(x.bid)}
+                                        </span>
+                                      </div>
+                                      <textarea
+                                        value={x.alert || ''}
+                                        onChange={(e) => updateBidAlertAt(x._i, e.target.value)}
+                                        rows={1}
+                                        style={{ minHeight: "38px", lineHeight: "20px" }}
+                                        className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none overflow-auto"
+                                        placeholder="Edit alert text..."
+                                      />
+                                    </div>
+                                  ))
+                              )}
                           </div>
+                        </details>
+
+{/* Annotations (collapsed by default) */}
+                        <details className="mt-3 border border-gray-200 rounded-md bg-white p-2">
+                          <summary className="cursor-pointer select-none text-sm font-medium">
+                            Annotations ({(structuredAuction || []).filter(x => (x.annotation || '').trim()).length})
+                          </summary>
+
+                          <div className="mt-2 space-y-2">
+                            {(structuredAuction || [])
+                              .map((x, i) => ({...x, _i: i}))
+                              .filter(x => (x.annotation || '').trim())
+                              .map(x => (
+                                <div key={`bid-anno-${x._i}`} className="border border-gray-100 rounded-md p-2 resize overflow-auto flex flex-col">
+                                  <div className="text-xs text-gray-600 mb-1">
+
+                                    <span className={(String(x.bid || '').includes('h') || String(x.bid || '').includes('d')) ? 'text-red-600 font-medium' : 'font-medium'}>
+                                      {renderBidLabel(x.bid)}
+                                    </span>
+                                  </div>
+                                  <textarea
+                                    value={x.annotation || ''}
+                                    onChange={(e) => updateBidAnnotationAt(x._i, e.target.value)}
+                                    className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none min-h-[38px] overflow-auto"
+                                    placeholder="Edit annotation..."
+                                  />
+                                </div>
+                              ))}
+
+                            {(structuredAuction || []).filter(x => (x.annotation || '').trim()).length === 0 && (
+                              <div className="text-sm text-gray-500">No annotations yet.</div>
+                            )}
+                          </div>
+                        </details>
+</div>
                         </div>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
-              
-              <button
-                type="button"
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className="text-blue-600 hover:text-blue-800 font-medium flex items-center"
-              >
-                {showAdvanced ? 'Hide' : 'Show'} More Options
-                <svg 
-                  xmlns="http://www.w3.org/2000/svg" 
-                  className={`h-5 w-5 ml-1 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} 
-                  fill="none" 
-                  viewBox="0 0 24 24" 
-                  stroke="currentColor"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
             </div>
+            <div>
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={toggleBridgeDiagram}
+                    className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                  >
+                    {showBridgeDiagram ? 'Hide' : 'Show'} Bridge Diagram
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      className={`h-4 w-4 ml-1 transition-transform ${showBridgeDiagram ? 'rotate-180' : ''}`} 
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setPlaySequence(Array(13).fill(''))}
+                    className="text-gray-500 hover:text-red-600"
+                    title="Clear all play sequence"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              
+              {showBridgeDiagram && (
+                <div className="mt-3 p-3 border border-gray-200 rounded-md mb-4">
+                  <BridgeDiagram
+                    hands={hands}
+                    setHands={setHands}
+                                        playSequence={playSequence}
+                    setPlaySequence={setPlaySequence}
+                    onUndoLastCard={handleUndoLastCard}
+            onRedoLastCard={handleRedoLastCard}
+            canRedoLastCard={playRedoStack.length > 0}
+            onClearPlayRedo={() => setPlayRedoStack([])}
+                    cardAnnotation={cardAnnotation}
+                    setCardAnnotation={setCardAnnotation}
+                  currentToAct={currentToAct}
+                            displayTrickLeader={displayTrickLeader}
+                            displayTrickIndex={displayTrickIndex}
+                    boardNumber={boardNumber}
+                    dealer={dealer}
+                    vulnerability={vulnerability}
+                    structuredAuction={structuredAuction}
+                    contractDisplay={contractDisplay}
+                    nsTricks={trickCounts.ns}
+                    ewTricks={trickCounts.ew}
+                          />
+
+                  {/* Play sequence grid for click-to-annotate */}
+                  <div className="mt-3 border border-gray-200 rounded-md bg-white relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowPlayGrid(v => !v)}
+                      className="w-full px-3 py-2 flex items-center justify-between text-sm font-medium text-gray-800 hover:bg-gray-50"
+                    >
+                      <span>Play Record</span>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className={`h-4 w-4 transition-transform ${showPlayGrid ? 'rotate-180' : ''}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {showPlayGrid && (
+                      <div className="p-3">
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse table-fixed text-sm">
+                            <thead>
+                              <tr>
+                                <th className="w-16 px-2 py-1 border bg-gray-100 text-center">Trick</th>
+                                <th className="px-2 py-1 border bg-gray-100 text-center">1st</th>
+                                <th className="px-2 py-1 border bg-gray-100 text-center">2nd</th>
+                                <th className="px-2 py-1 border bg-gray-100 text-center">3rd</th>
+                                <th className="px-2 py-1 border bg-gray-100 text-center">4th</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {playGridRows.map(row => (
+                                <tr key={`play-grid-${row.trickIndex}`}>
+                                  <td className="px-2 py-1 border text-gray-700 text-center">{row.trickIndex + 1}</td>
+                                  {row.cards.map((card, cardIndex) => (
+                                    <td key={`play-grid-${row.trickIndex}-${cardIndex}`} className="px-2 py-1 border text-center">
+                                      {card ? (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const r = e.currentTarget.getBoundingClientRect();
+                                            setActivePlayGridPopup({
+                                              trickIndex: row.trickIndex,
+                                              cardIndex,
+                                              label: `${card.suitSym}${card.rankSym === 'T' ? '10' : card.rankSym}`,
+                                              isRed: card.isRed,
+                                              x: Math.min(r.right + 8, window.innerWidth - 320),
+                                              y: Math.max(r.top - 4, 8)
+                                            });
+                                          }}
+                                          className={`px-2 py-1 rounded border ${card.isAnnotated ? 'bg-yellow-200 border-yellow-300' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
+                                          title="Click to edit annotation"
+                                        >
+                                          <span className={card.isRed ? 'text-red-600' : 'text-black'}>
+                                            {card.suitSym}{card.rankSym === 'T' ? '10' : card.rankSym}
+                                          </span>
+                                        </button>
+                                      ) : (
+                                        <span className="text-gray-300">—</span>
+                                      )}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {activePlayGridPopup && (
+                          <div
+                            className="fixed z-50 inline-block min-w-[220px] w-72 max-w-[calc(100vw-24px)] max-h-[calc(100vh-24px)] bg-white border border-gray-300 resize overflow-auto flex flex-col rounded-md shadow px-2 py-2 text-xs text-gray-900"
+                            style={{ left: activePlayGridPopup.x, top: activePlayGridPopup.y }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="text-xs font-medium mb-2">
+                              <span className={activePlayGridPopup.isRed ? 'text-red-600' : 'text-gray-700'}>
+                                {activePlayGridPopup.label || ''}
+                              </span>
+                            </div>
+                            <textarea
+                              value={(playGridRows[activePlayGridPopup.trickIndex]?.cards[activePlayGridPopup.cardIndex]?.text) || ''}
+                              onChange={(e) => updatePlayAnnotation(activePlayGridPopup.trickIndex, activePlayGridPopup.cardIndex, e.target.value)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              placeholder="Add annotation..."
+                              className="w-full flex-1 px-2 py-1 text-xs border border-gray-300 rounded resize-none min-h-[32px] overflow-auto"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>{/* Annotation panel (collapsed by default) */}
+                  <div className="mt-3 border border-gray-200 rounded-md bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setShowAnnotations(v => !v)}
+                      className="w-full px-3 py-2 flex items-center justify-between text-sm font-medium text-gray-800 hover:bg-gray-50"
+                    >
+                      <span>Annotations ({annotatedPlays.length})</span>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className={`h-4 w-4 transition-transform ${showAnnotations ? 'rotate-180' : ''}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {showAnnotations && (
+                      <div className="p-3 space-y-2">
+                        {annotatedPlays.length === 0 ? (
+                          <div className="text-sm text-gray-500">No annotations yet.</div>
+                        ) : (
+                          annotatedPlays.map(item => (
+                            <div key={item.key} className="border border-gray-200 rounded-md p-2 resize overflow-auto flex flex-col">
+                              <div className="text-sm font-medium text-gray-800 mb-2">
+                                Trick {item.trickIndex + 1} — {item.seat.charAt(0).toUpperCase() + item.seat.slice(1)} —{' '}
+                                <span className={item.isRed ? 'text-red-600' : 'text-black'}>
+                                  {item.suitSym}{item.rankSym === 'T' ? '10' : item.rankSym}
+                                </span>
+                              </div>
+                              <textarea
+                                value={item.text}
+                                onChange={(e) => updatePlayAnnotation(item.trickIndex, item.cardIndex, e.target.value)}
+                                className="w-full flex-1 px-3 py-1 border border-gray-300 rounded-md text-sm resize-none overflow-auto"
+                                rows="2"
+                              />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  
+
+</div>
+              )}
+              
+            </div>
+            
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Number of Tricks Claimed</label>
+              <input
+                type="number"
+                min="0"
+                max="13"
+                value={claimedTricks}
+                onChange={(e) => setClaimedTricks(e.target.value)}
+                className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                placeholder="0-13"
+              />
+            </div>
+            </div>
+
+            <div>
+            
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="text-blue-600 hover:text-blue-800 font-medium flex items-center"
+            >
+              {showAdvanced ? 'Hide' : 'Show'} More Options
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                className={`h-5 w-5 ml-1 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} 
+                fill="none" 
+                viewBox="0 0 24 24" 
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            </div>
+
           </div>
           
           {showAdvanced && (
             <div className="mt-4 p-4 border border-gray-200 rounded-md bg-gray-50">
-              <h2 className="text-lg font-semibold mb-3">More Options</h2>
-              
-              <div className="grid grid-cols-1 gap-4">
+                            <div className="grid grid-cols-1 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Kibitzer View</label>
+                  <h3 className="text-md font-medium mb-2">Kibitzer View</h3>
                   <select
                     value={kibitzer}
                     onChange={(e) => setKibitzer(e.target.value)}
-                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="">All hands visible</option>
                     <option value="n">North</option>
@@ -2507,92 +4350,19 @@ const BridgeHandviewerApp = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {directions.map(direction => (
                       <div key={`name-${direction}`} className="mb-2">
-                        <label className="block text-sm font-medium text-gray-700 capitalize mb-1">{direction}'s Name</label>
+                        <label className="block text-sm font-medium text-gray-700 capitalize mb-1">{direction.charAt(0).toUpperCase() + direction.slice(1)}</label>
                         <input
                           type="text"
                           value={names[direction]}
                           onChange={(e) => handleNameChange(direction, e.target.value)}
-                          className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                          placeholder={`${direction}'s name`}
+                          className="block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                          placeholder={`${direction.charAt(0).toUpperCase() + direction.slice(1)}'s name`}
                         />
                       </div>
                     ))}
                   </div>
                 </div>
                 
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-md font-medium">Play Sequence</h3>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={toggleBridgeDiagram}
-                        className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
-                      >
-                        {showBridgeDiagram ? 'Hide' : 'Show'} Bridge Diagram
-                        <svg 
-                          xmlns="http://www.w3.org/2000/svg" 
-                          className={`h-4 w-4 ml-1 transition-transform ${showBridgeDiagram ? 'rotate-180' : ''}`} 
-                          fill="none" 
-                          viewBox="0 0 24 24" 
-                          stroke="currentColor"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => setPlaySequence(Array(13).fill(''))}
-                        className="text-gray-500 hover:text-red-600"
-                        title="Clear all play sequence"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-600 mb-2">Format for each trick: sjsqsksa</p>
-                  
-                  {showBridgeDiagram && (
-                    <div className="mt-3 p-3 border border-gray-200 rounded-md mb-4">
-                      <BridgeDiagram
-                        hands={hands}
-                        playSequence={playSequence}
-                        setPlaySequence={setPlaySequence}
-                        onUndoLastCard={handleUndoLastCard}
-                        cardAnnotation={cardAnnotation}
-                        setCardAnnotation={setCardAnnotation}
-                      />
-                    </div>
-                  )}
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {Array.from({ length: 13 }).map((_, index) => (
-                      <div key={`trick-${index}`} className="flex items-center">
-                        <label className="block text-sm font-medium text-gray-700 mr-2 w-16">Trick {index + 1}:</label>
-                        <input
-                          type="text"
-                          value={playSequence[index]}
-                          onChange={(e) => handlePlaySequenceChange(index, e.target.value)}
-                          className="block w-full px-2 py-1 border border-gray-300 rounded-md"
-                          placeholder=""
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Number of Tricks Claimed</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="13"
-                    value={claimedTricks}
-                    onChange={(e) => setClaimedTricks(e.target.value)}
-                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="0-13"
-                  />
-                </div>
               </div>
             </div>
           )}
@@ -2600,46 +4370,61 @@ const BridgeHandviewerApp = () => {
           <div className="mt-6">
             <div className="mb-4">
               <label className="block text-lg font-medium text-gray-900 mb-2">Handviewer URL</label>
-              <div className="flex rounded-md shadow-sm">
+
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
                   readOnly
                   value={generatedUrl}
-                  className="flex-1 block w-full px-3 py-2 rounded-l-md rounded-r-md border border-gray-300 bg-gray-50 text-sm"
+                  className="flex-1 px-3 py-2 rounded-md border border-gray-300 bg-gray-50 text-sm"
                 />
-                <button
-                  type="button"
-                  onClick={copyToClipboard}
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-r-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  style={{ marginLeft: '-1px' }}
-                >
-                  {urlCopied ? (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                      </svg>
-                      Copy
-                    </>
-                  )}
-                </button>
+                <div className="flex gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={copyToClipboard}
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    {urlCopied ? (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                        Copy
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { if (generatedUrl) window.open(generatedUrl, '_blank'); }}
+                    disabled={!generatedUrl}
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M12.293 2.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-6 6a1 1 0 01-.707.293H7a1 1 0 01-1-1V9a1 1 0 01.293-.707l6-6z" />
+                      <path d="M3 7a2 2 0 012-2h1a1 1 0 010 2H5v10h10v-1a1 1 0 112 0v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                    </svg>
+                    Open
+                  </button>
+                </div>
               </div>
             </div>
             
             <div className="mb-4">
               <label className="block text-lg font-medium text-gray-900 mb-2">Bridge Winners Embed Code</label>
-              <div className="flex rounded-md shadow-sm">
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
                   readOnly
                   value={`{handviewer ${generatedUrl.split('?')[1]}}`}
-                  className="flex-1 block w-full px-3 py-2 rounded-l-md rounded-r-md border border-gray-300 bg-gray-50 text-sm"
+                  className="flex-1 px-3 py-2 rounded-md border border-gray-300 bg-gray-50 text-sm"
                 />
                 <button
                   type="button"
@@ -2648,8 +4433,7 @@ const BridgeHandviewerApp = () => {
                     setEmbedCopied(true);
                     setTimeout(() => setEmbedCopied(false), 2000);
                   }}
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-r-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  style={{ marginLeft: '-1px' }}
+                  className="inline-flex flex-shrink-0 items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   {embedCopied ? (
                     <>
@@ -2670,15 +4454,24 @@ const BridgeHandviewerApp = () => {
               </div>
             </div>
             
-            <div className="mb-4">
+            <div className="mb-4 flex gap-3 flex-wrap">
               <button
                 onClick={downloadPBN}
-                className="w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 transition font-medium flex items-center justify-center"
+                className="px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 transition font-medium flex items-center justify-center"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
                 Download as PBN
+              </button>
+              <button
+                onClick={downloadLIN}
+                className=" px-4 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition font-medium flex items-center justify-center"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" />
+                </svg>
+                Download as LIN
               </button>
             </div>
           </div>
@@ -2689,8 +4482,46 @@ const BridgeHandviewerApp = () => {
 };
 
     // Mount
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<BridgeHandviewerApp />);
+    ReactDOM.render(<BridgeHandviewerApp />, document.getElementById('root'));</script>
+
+  <script>
+    (function () {
+      function ensureBox() {
+        var box = document.getElementById('error-overlay');
+        if (!box) {
+          box = document.createElement('pre');
+          box.id = 'error-overlay';
+          box.style.position = 'fixed';
+          box.style.left = '12px';
+          box.style.right = '12px';
+          box.style.bottom = '12px';
+          box.style.maxHeight = '40vh';
+          box.style.overflow = 'auto';
+          box.style.padding = '10px';
+          box.style.background = 'rgba(0,0,0,0.85)';
+          box.style.color = '#fff';
+          box.style.fontSize = '12px';
+          box.style.zIndex = 999999;
+          box.style.borderRadius = '8px';
+          box.style.whiteSpace = 'pre-wrap';
+          box.style.display = 'none';
+          document.body.appendChild(box);
+        }
+        return box;
+      }
+      function show(msg) {
+        var box = ensureBox();
+        box.style.display = 'block';
+        box.textContent += (box.textContent ? "\n\n" : "") + msg;
+      }
+      window.addEventListener('error', function (e) {
+        show("JS Error: " + (e && e.message ? e.message : "Unknown") + (e && e.filename ? "\n" + e.filename + ":" + e.lineno + ":" + e.colno : ""));
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        show("Promise Rejection: " + (e && e.reason ? (e.reason.stack || e.reason) : "Unknown"));
+      });
+    })();
   </script>
+
 </body>
 </html>
