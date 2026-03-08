@@ -200,7 +200,7 @@ const CardPicker = ({ hands, setHands, isCardAssigned }) => {
 };
 
 // BridgeDiagram Component
-const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoLastCard, cardAnnotation, setCardAnnotation, currentToAct, displayTrickLeader, displayTrickIndex, boardNumber, dealer, vulnerability, structuredAuction, contractDisplay, nsTricks, ewTricks, onRedoLastCard, canRedoLastCard, onClearPlayRedo }) => {
+const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoLastCard, onUndoTrick, cardAnnotation, setCardAnnotation, currentToAct, displayTrickLeader, displayTrickIndex, boardNumber, dealer, vulnerability, structuredAuction, contractDisplay, nsTricks, ewTricks, onRedoLastCard, canRedoLastCard, onRedoTrick, canRedoTrick, onClearPlayRedo }) => {
   const suits = [
     { name: 'spades', symbol: '♠', code: 's' },
     { name: 'hearts', symbol: '♥', code: 'h' },
@@ -772,7 +772,22 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
         
         {/* Bottom-left block with Undo (below West, next to South) */}
         <div className="border border-gray-200 rounded-md bg-white p-2 flex items-end md:col-start-1 md:row-start-3">
-          <div className="flex gap-2 items-center">
+          
+<div className="flex gap-2 items-center">
+            <button
+              onClick={onUndoTrick}
+              disabled={playSequence.every(trick => trick === '')}
+              title="Back a trick"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${!playSequence.every(trick => trick === '')
+                          ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7M20 19l-7-7 7-7" />
+              </svg>
+            </button>
+
             <button
               onClick={onUndoLastCard}
               disabled={playSequence.every(trick => trick === '')}
@@ -783,7 +798,7 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                           : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
 
@@ -797,7 +812,21 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                           : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+
+            <button
+              onClick={onRedoTrick}
+              disabled={!canRedoTrick}
+              title="Forward a trick"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${canRedoTrick
+                          ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M4 5l7 7-7 7" />
               </svg>
             </button>
           </div>
@@ -876,13 +905,64 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
 // Auction Table Component
 const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnnotation }) => {
   const [activeAlert, setActiveAlert] = React.useState(null);
+  const alertDragRef = React.useRef(null);
+  const [isDraggingAlertPopup, setIsDraggingAlertPopup] = React.useState(false);
   // activeAlert: { text?: string, x: number, y: number, index?: number, editing?: boolean, tab?: 'alert' | 'note', alertText?: string, noteText?: string }
   React.useEffect(() => {
     if (!activeAlert) return;
-    const handleDocClick = () => setActiveAlert(null);
+    const handleDocClick = () => {
+      if (isDraggingAlertPopup) return;
+      setActiveAlert(null);
+    };
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
-  }, [activeAlert]);
+  }, [activeAlert, isDraggingAlertPopup]);
+
+  React.useEffect(() => {
+    if (!isDraggingAlertPopup) return;
+
+    const onMove = (e) => {
+      setActiveAlert(prev => {
+        if (!prev || !prev.editing) return prev;
+        const d = alertDragRef.current;
+        if (!d) return prev;
+
+        const nx = d.origX + (e.clientX - d.startX);
+        const ny = d.origY + (e.clientY - d.startY);
+
+        const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+        const x = clamp(nx, 12, window.innerWidth - 12);
+        const y = clamp(ny, 12, window.innerHeight - 12);
+        return { ...prev, x, y };
+      });
+    };
+
+    const onUp = () => {
+      setIsDraggingAlertPopup(false);
+      alertDragRef.current = null;
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [isDraggingAlertPopup]);
+
+
+  const startDragAlertPopup = (e) => {
+    if (!activeAlert || !activeAlert.editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    alertDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: activeAlert.x || 12,
+      origY: activeAlert.y || 12
+    };
+    setIsDraggingAlertPopup(true);
+  };
 
   // Format the auction into rows
   const formatAuctionRows = () => {
@@ -1035,6 +1115,8 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
         >
           {activeAlert.editing && typeof activeAlert.index === 'number' ? (
             <>
+
+              <div className="h-2 -mt-1 mb-2 cursor-move" onMouseDown={startDragAlertPopup} />
               <div className="flex mb-2 overflow-hidden rounded border border-gray-200">
                 <button
                   className={`px-3 py-1 text-xs font-medium ${activeAlert.tab === 'alert' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
@@ -1288,7 +1370,7 @@ const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, aler
                       : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
 
@@ -1302,7 +1384,7 @@ const BiddingBox = ({ onBidSelected, currentAuction, dealer, onUndoLastBid, aler
                       : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
         </button>
 
@@ -1377,7 +1459,9 @@ const BridgeHandviewerApp = () => {
   const [showAnnotations, setShowAnnotations] = useState(false); // Annotation panel (collapsed by default)
   const [showPlayRecord, setShowPlayRecord] = useState(false); // Play record text list (collapsed by default)
   const [showPlayGrid, setShowPlayGrid] = useState(true); // Play sequence grid
-  const [activePlayGridPopup, setActivePlayGridPopup] = useState(null); // { trickIndex, cardIndex, x, y }
+  const [activePlayGridPopup, setActivePlayGridPopup] = useState(null);
+  const playPopupDragRef = React.useRef(null);
+  const [isDraggingPlayPopup, setIsDraggingPlayPopup] = useState(false); // { trickIndex, cardIndex, x, y }
   const [showCardPicker, setShowCardPicker] = useState(false); // State for card picker
   const [alertMessage, setAlertMessage] = useState('');
   const [bidAnnotation, setBidAnnotation] = useState(''); // New state for bid annotation
@@ -1386,9 +1470,11 @@ const BridgeHandviewerApp = () => {
   const [playRedoStack, setPlayRedoStack] = useState([]);
   const [claimedTricks, setClaimedTricks] = useState('');
   const [generatedUrl, setGeneratedUrl] = useState('');
+  const [remainingUrl, setRemainingUrl] = useState('');
 const [error, setError] = useState('');
   // Initialize separate copied state for different copy buttons
   const [urlCopied, setUrlCopied] = useState(false);
+  const [remainingUrlCopied, setRemainingUrlCopied] = useState(false);
   const [embedCopied, setEmbedCopied] = useState(false);
   const [importUrl, setImportUrl] = useState('');
   const [importFileName, setImportFileName] = useState('');
@@ -1396,10 +1482,46 @@ const [error, setError] = useState('');
 
   useEffect(() => {
     if (!activePlayGridPopup) return;
-    const handleDocClick = () => setActivePlayGridPopup(null);
+    const handleDocClick = () => {
+      if (isDraggingPlayPopup) return;
+      setActivePlayGridPopup(null);
+    };
     document.addEventListener('click', handleDocClick);
     return () => document.removeEventListener('click', handleDocClick);
-  }, [activePlayGridPopup]);
+  }, [activePlayGridPopup, isDraggingPlayPopup]);
+
+  useEffect(() => {
+    if (!isDraggingPlayPopup) return;
+
+    const onMove = (e) => {
+      setActivePlayGridPopup(prev => {
+        if (!prev) return prev;
+        const d = playPopupDragRef.current;
+        if (!d) return prev;
+
+        const nx = d.origX + (e.clientX - d.startX);
+        const ny = d.origY + (e.clientY - d.startY);
+
+        const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+        const x = clamp(nx, 12, window.innerWidth - 12);
+        const y = clamp(ny, 12, window.innerHeight - 12);
+        return { ...prev, x, y };
+      });
+    };
+
+    const onUp = () => {
+      setIsDraggingPlayPopup(false);
+      playPopupDragRef.current = null;
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [isDraggingPlayPopup]);
+
 
   useEffect(() => {
     const v = vulFromBoardNumber(boardNumber);
@@ -2429,7 +2551,8 @@ return result;
 
         if (kibitzOn) params.push(`k=${String(kibitzer).trim().toLowerCase()}`);
 
-        if (auction) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auction))}`);
+        const auctionNoAnn = String(auction || '').replace(/\{[^}]*\}/g, '');
+        if (auctionNoAnn) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auctionNoAnn))}`);
         const fullPlaySequence = (playSequence || []).join('');
         if (fullPlaySequence) params.push(`p=${encodeForHandviewer(normalizeInnerEncoding(fullPlaySequence))}`);
         // Claim (c=). Note: Handviewer will show all 4 hands if a claim is made before all 52 cards are played.
@@ -2537,7 +2660,94 @@ return result;
       // Output: Classic only
       const url = buildClassicUrl();
 
+      // Remaining-cards URL: remove any played cards from the hands and omit the play record (p=)
+      const buildRemainingClassicUrl = () => {
+        const dirs = ['north','east','south','west'];
+        const suitMap = { s: 'spades', h: 'hearts', d: 'diamonds', c: 'clubs' };
+        const rankMap = { a:'A', k:'K', q:'Q', j:'J', t:'T', '9':'9', '8':'8', '7':'7', '6':'6', '5':'5', '4':'4', '3':'3', '2':'2' };
+
+        const rem = {
+          north: {
+            spades: normalizeRanks(hands.north.spades),
+            hearts: normalizeRanks(hands.north.hearts),
+            diamonds: normalizeRanks(hands.north.diamonds),
+            clubs: normalizeRanks(hands.north.clubs),
+          },
+          east: {
+            spades: normalizeRanks(hands.east.spades),
+            hearts: normalizeRanks(hands.east.hearts),
+            diamonds: normalizeRanks(hands.east.diamonds),
+            clubs: normalizeRanks(hands.east.clubs),
+          },
+          south: {
+            spades: normalizeRanks(hands.south.spades),
+            hearts: normalizeRanks(hands.south.hearts),
+            diamonds: normalizeRanks(hands.south.diamonds),
+            clubs: normalizeRanks(hands.south.clubs),
+          },
+          west: {
+            spades: normalizeRanks(hands.west.spades),
+            hearts: normalizeRanks(hands.west.hearts),
+            diamonds: normalizeRanks(hands.west.diamonds),
+            clubs: normalizeRanks(hands.west.clubs),
+          }
+        };
+
+        // Collect played cards from the play record (ignoring annotations)
+        const played = [];
+        (playSequence || []).forEach(trick => {
+          extractCardCodes(trick || '').forEach(cc => played.push(cc.toLowerCase()));
+        });
+
+        // Remove each played card from whichever hand currently contains it
+        played.forEach(cc => {
+          const suitCode = cc[0];
+          const rankCode = cc[1];
+          const suitName = suitMap[suitCode];
+          const rank = rankMap[rankCode];
+          if (!suitName || !rank) return;
+
+          for (const d of dirs) {
+            const cur = rem[d][suitName] || '';
+            const pos = cur.indexOf(rank);
+            if (pos !== -1) {
+              rem[d][suitName] = cur.slice(0, pos) + cur.slice(pos + 1);
+              break;
+            }
+          }
+        });
+
+        // Build URL using remaining hands only; keep names/dealer/vul/board/kibitzer/auction
+        const params = [];
+        const nH = formatHand(rem.north);
+        const eH = formatHand(rem.east);
+        const sH = formatHand(rem.south);
+        const wH = formatHand(rem.west);
+
+        if (nH) params.push(`n=${encodeForHandviewer(nH)}`);
+        if (eH) params.push(`e=${encodeForHandviewer(eH)}`);
+        if (sH) params.push(`s=${encodeForHandviewer(sH)}`);
+        if (wH) params.push(`w=${encodeForHandviewer(wH)}`);
+
+        if (names.north) params.push(`nn=${encodeForHandviewer(names.north)}`);
+        if (names.south) params.push(`sn=${encodeForHandviewer(names.south)}`);
+        if (names.east) params.push(`en=${encodeForHandviewer(names.east)}`);
+        if (names.west) params.push(`wn=${encodeForHandviewer(names.west)}`);
+
+        if (dealer) params.push(`d=${encodeForHandviewer(dealer)}`);
+        if (vulnerability && vulnerability !== '-') params.push(`v=${encodeForHandviewer(vulnerability)}`);
+        if (boardNumber) params.push(`b=${encodeForHandviewer(boardNumber)}`);
+
+        if (kibitzOn) params.push(`k=${String(kibitzer).trim().toLowerCase()}`);
+        if (auction) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auction))}`);
+
+        return `${baseUrl}?${params.join('&')}`;
+      };
+
+      const remUrl = buildRemainingClassicUrl();
+
       setGeneratedUrl(url);
+      setRemainingUrl(remUrl);
       setError('');
     } catch (err) {
       setError('Error generating URL: ' + err.message);
@@ -2712,6 +2922,64 @@ return result;
     setPlaySequence(newPlaySequence);
   };
 
+  // Undo an entire trick (up to 4 cards at once)
+  const handleUndoTrick = () => {
+    // Find the last trick with cards
+    let lastTrickIndex = -1;
+    for (let i = playSequence.length - 1; i >= 0; i--) {
+      const cardCodes = extractCardCodes(playSequence[i]);
+      if (cardCodes.length > 0) {
+        lastTrickIndex = i;
+        break;
+      }
+    }
+    if (lastTrickIndex < 0) return;
+
+    const trickStr = playSequence[lastTrickIndex] || '';
+    const cards = parseTrickCardsWithAnnotations(trickStr);
+    const k = cards.length;
+    if (k === 0) return;
+
+    const undoCount = Math.min(4, k);
+    const keepCards = cards.slice(0, k - undoCount);
+    const undoCards = cards.slice(k - undoCount);
+
+    const toSegment = (c) => {
+      const cc = `${c.suitCode}${c.rankCode}`;
+      return c.rawAnn ? `${cc}{${c.rawAnn}}` : cc;
+    };
+
+    const newPlaySequence = [...playSequence];
+    newPlaySequence[lastTrickIndex] = keepCards.map(toSegment).join('');
+    setPlaySequence(newPlaySequence);
+
+    // Push redo actions so redo restores in correct order (A then B then C then D)
+    const actions = undoCards.map(toSegment).reverse().map(seg => ({ trickIndex: lastTrickIndex, removed: seg }));
+    setPlayRedoStack(prev => [...prev, ...actions]);
+  };
+
+  // Redo an entire trick (up to 4 cards at once, same trick only)
+  const handleRedoTrick = () => {
+    if (playRedoStack.length === 0) return;
+
+    const newStack = [...playRedoStack];
+    const top = newStack[newStack.length - 1];
+    if (!top) return;
+
+    const t = top.trickIndex;
+    const toRedo = [];
+    while (newStack.length > 0 && toRedo.length < 4 && newStack[newStack.length - 1].trickIndex === t) {
+      toRedo.push(newStack.pop());
+    }
+
+    const newPlaySequence = [...playSequence];
+    const current = newPlaySequence[t] || '';
+    newPlaySequence[t] = current + toRedo.map(a => a.removed || '').join('');
+    setPlaySequence(newPlaySequence);
+    setPlayRedoStack(newStack);
+  };
+
+
 // Toggle bridge diagram visibility
   const toggleBridgeDiagram = () => {
     setShowBridgeDiagram(!showBridgeDiagram);
@@ -2746,6 +3014,14 @@ return result;
     } catch (err) {
       setError(`Failed to copy: ${err.message}`);
     }
+  };
+
+  const copyRemainingToClipboard = () => {
+    if (!remainingUrl) return;
+    navigator.clipboard.writeText(remainingUrl).then(() => {
+      setRemainingUrlCopied(true);
+      setTimeout(() => setRemainingUrlCopied(false), 2000);
+    });
   };
 
   // Reset all inputs
@@ -2837,6 +3113,18 @@ return result;
   };
 
   
+  const startDragPlayPopup = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingPlayPopup(true);
+    playPopupDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: activePlayGridPopup?.x || 12,
+      origY: activePlayGridPopup?.y || 12
+    };
+  };
+
   // Parse compact auction string (e.g. "1c(alert){note}p1d...") into structuredAuction
   // This is used to ensure alerts/annotations are preserved even if the user edited the auction text manually.
   const parseCompactAuctionString = (auctionStr, dealerChar) => {
@@ -4029,7 +4317,7 @@ return (
                                   .map((x, i) => ({...x, _i: i}))
                                   .filter(x => (x.alert || '').trim())
                                   .map(x => (
-                                    <div key={`bid-alert-${x._i}`} className="border border-gray-100 rounded-md p-2 resize overflow-auto flex flex-col">
+                                    <div key={`bid-alert-${x._i}`} className="border border-gray-100 rounded-md p-2">
                                       <div className="text-xs text-gray-600 mb-1">
 
                                         <span className={(String(x.bid || '').includes('h') || String(x.bid || '').includes('d')) ? 'text-red-600 font-medium' : 'font-medium'}>
@@ -4041,7 +4329,7 @@ return (
                                         onChange={(e) => updateBidAlertAt(x._i, e.target.value)}
                                         rows={1}
                                         style={{ minHeight: "38px", lineHeight: "20px" }}
-                                        className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none overflow-auto"
+                                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm resize-y overflow-auto"
                                         placeholder="Edit alert text..."
                                       />
                                     </div>
@@ -4061,7 +4349,7 @@ return (
                               .map((x, i) => ({...x, _i: i}))
                               .filter(x => (x.annotation || '').trim())
                               .map(x => (
-                                <div key={`bid-anno-${x._i}`} className="border border-gray-100 rounded-md p-2 resize overflow-auto flex flex-col">
+                                <div key={`bid-anno-${x._i}`} className="border border-gray-100 rounded-md p-2">
                                   <div className="text-xs text-gray-600 mb-1">
 
                                     <span className={(String(x.bid || '').includes('h') || String(x.bid || '').includes('d')) ? 'text-red-600 font-medium' : 'font-medium'}>
@@ -4071,7 +4359,7 @@ return (
                                   <textarea
                                     value={x.annotation || ''}
                                     onChange={(e) => updateBidAnnotationAt(x._i, e.target.value)}
-                                    className="w-full flex-1 px-2 py-1 border border-gray-300 rounded-md text-sm resize-none min-h-[38px] overflow-auto"
+                                    className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm resize-y min-h-[38px] overflow-auto"
                                     placeholder="Edit annotation..."
                                   />
                                 </div>
@@ -4109,16 +4397,7 @@ return (
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </button>
-                  <button
-                    onClick={() => setPlaySequence(Array(13).fill(''))}
-                    className="text-gray-500 hover:text-red-600"
-                    title="Clear all play sequence"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                </div>
+</div>
               </div>
               
               {showBridgeDiagram && (
@@ -4128,9 +4407,12 @@ return (
                     setHands={setHands}
                                         playSequence={playSequence}
                     setPlaySequence={setPlaySequence}
+                    onUndoTrick={handleUndoTrick}
                     onUndoLastCard={handleUndoLastCard}
             onRedoLastCard={handleRedoLastCard}
             canRedoLastCard={playRedoStack.length > 0}
+                    onRedoTrick={handleRedoTrick}
+                    canRedoTrick={playRedoStack.length > 0}
             onClearPlayRedo={() => setPlayRedoStack([])}
                     cardAnnotation={cardAnnotation}
                     setCardAnnotation={setCardAnnotation}
@@ -4148,22 +4430,35 @@ return (
 
                   {/* Play sequence grid for click-to-annotate */}
                   <div className="mt-3 border border-gray-200 rounded-md bg-white relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowPlayGrid(v => !v)}
-                      className="w-full px-3 py-2 flex items-center justify-between text-sm font-medium text-gray-800 hover:bg-gray-50"
-                    >
-                      <span>Play Record</span>
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className={`h-4 w-4 transition-transform ${showPlayGrid ? 'rotate-180' : ''}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
+                    <div className="w-full px-3 py-2 flex items-center justify-between text-sm font-medium text-gray-800 hover:bg-gray-50">
+                      <button
+                        type="button"
+                        onClick={() => setShowPlayGrid(v => !v)}
+                        className="flex items-center gap-2"
                       >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
+                        <span>Play Record</span>
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className={`h-4 w-4 transition-transform ${showPlayGrid ? 'rotate-180' : ''}`}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setPlaySequence(Array(13).fill('')); }}
+                        className="text-gray-500 hover:text-red-600"
+                        title="Clear all play record"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
 
                     {showPlayGrid && (
                       <div className="p-3">
@@ -4223,6 +4518,9 @@ return (
                             style={{ left: activePlayGridPopup.x, top: activePlayGridPopup.y }}
                             onClick={(e) => e.stopPropagation()}
                           >
+                            
+                            <div className="h-2 -mt-1 mb-2 cursor-move" onMouseDown={startDragPlayPopup} />
+
                             <div className="text-xs font-medium mb-2">
                               <span className={activePlayGridPopup.isRed ? 'text-red-600' : 'text-gray-700'}>
                                 {activePlayGridPopup.label || ''}
@@ -4264,7 +4562,7 @@ return (
                           <div className="text-sm text-gray-500">No annotations yet.</div>
                         ) : (
                           annotatedPlays.map(item => (
-                            <div key={item.key} className="border border-gray-200 rounded-md p-2 resize overflow-auto flex flex-col">
+                            <div key={item.key} className="border border-gray-200 rounded-md p-2">
                               <div className="text-sm font-medium text-gray-800 mb-2">
                                 Trick {item.trickIndex + 1} — {item.seat.charAt(0).toUpperCase() + item.seat.slice(1)} —{' '}
                                 <span className={item.isRed ? 'text-red-600' : 'text-black'}>
@@ -4274,7 +4572,7 @@ return (
                               <textarea
                                 value={item.text}
                                 onChange={(e) => updatePlayAnnotation(item.trickIndex, item.cardIndex, e.target.value)}
-                                className="w-full flex-1 px-3 py-1 border border-gray-300 rounded-md text-sm resize-none overflow-auto"
+                                className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm resize-y overflow-auto"
                                 rows="2"
                               />
                             </div>
@@ -4346,7 +4644,19 @@ return (
                 </div>
                 
                 <div>
-                  <h3 className="text-md font-medium mb-2">Player Names</h3>
+                  <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-md font-medium">Player Names</h3>
+                  <button
+                    type="button"
+                    onClick={() => setNames({ north: '', east: '', south: '', west: '' })}
+                    className="text-gray-500 hover:text-red-600"
+                    title="Clear all player names"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {directions.map(direction => (
                       <div key={`name-${direction}`} className="mb-2">
@@ -4416,8 +4726,57 @@ return (
                 </div>
               </div>
             </div>
+
             
             <div className="mb-4">
+              <label className="block text-lg font-medium text-gray-900 mb-2">Handviewer URL (Remaining Cards)</label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={remainingUrl}
+                  className="flex-1 px-3 py-2 rounded-md border border-gray-300 bg-gray-50 text-sm"
+                />
+                <div className="flex gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={copyRemainingToClipboard}
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    {remainingUrlCopied ? (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                        Copy
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { if (remainingUrl) window.open(remainingUrl, '_blank'); }}
+                    disabled={!remainingUrl}
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M12.293 2.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-6 6a1 1 0 01-.707.293H7a1 1 0 01-1-1V9a1 1 0 01.293-.707l6-6z" />
+                      <path d="M3 7a2 2 0 012-2h1a1 1 0 010 2H5v10h10v-1a1 1 0 112 0v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                    </svg>
+                    Open
+                  </button>
+                </div>
+              </div>
+            </div>
+<div className="mb-4">
               <label className="block text-lg font-medium text-gray-900 mb-2">Bridge Winners Embed Code</label>
               <div className="flex items-center gap-2">
                 <input
