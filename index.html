@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BBO Handviewer Link Generator</title>
+  <title>BBO Handviewer Link Generator v247</title>
 
   <!-- Tailwind (for the className styles used in the TSX) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -172,7 +172,7 @@ const CardPicker = ({ hands, setHands, isCardAssigned }) => {
             }`}>
               {suit.symbol} {suit.name.charAt(0).toUpperCase() + suit.name.slice(1)}
             </div>
-            <div className="flex flex-wrap">
+            <div className="relative z-10 pl-[1px] flex flex-wrap gap-x-0 gap-y-0 overflow-visible">
               {ranks.map(rank => {
                 const assignedHand = getAssignedHand(suit.name, rank);
                 return (
@@ -200,7 +200,7 @@ const CardPicker = ({ hands, setHands, isCardAssigned }) => {
 };
 
 // BridgeDiagram Component
-const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoLastCard, onUndoTrick, cardAnnotation, setCardAnnotation, currentToAct, displayTrickLeader, displayTrickIndex, boardNumber, dealer, vulnerability, structuredAuction, contractDisplay, nsTricks, ewTricks, onRedoLastCard, canRedoLastCard, onRedoTrick, canRedoTrick, onClearPlayRedo }) => {
+const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoLastCard, onUndoTrick, cardAnnotation, setCardAnnotation, currentToAct, displayTrickLeader, displayTrickIndex, boardNumber, isRotated, dealer, vulnerability, structuredAuction, contractDisplay, nsTricks, ewTricks, onRedoLastCard, canRedoLastCard, onRedoTrick, canRedoTrick, onClearPlayRedo, onJumpToFirstTrick, canJumpToFirstTrick, onJumpToEndTrick, canJumpToEndTrick, onRotateClockwise, onRotateDeclarerSouth }) => {
   const suits = [
     { name: 'spades', symbol: '♠', code: 's' },
     { name: 'hearts', symbol: '♥', code: 'h' },
@@ -574,6 +574,40 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
   
   const currentTrickNumber = getCurrentTrickNumber();
   const currentTrickCards = getCurrentTrickCards();
+  const northCellRef = React.useRef(null);
+  const [northCellHeight, setNorthCellHeight] = React.useState(null);
+
+  React.useLayoutEffect(() => {
+    const el = northCellRef.current;
+    if (!el) return;
+
+    let rafId = 0;
+    const measure = () => {
+      const next = Math.ceil(el.getBoundingClientRect().height);
+      setNorthCellHeight((prev) => (prev === next ? prev : next));
+    };
+    const schedule = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(measure);
+    };
+
+    schedule();
+    window.addEventListener('resize', schedule);
+
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => schedule());
+      ro.observe(el);
+    }
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', schedule);
+      if (ro) ro.disconnect();
+    };
+  }, [hands]);
+
+  const matchedTopCellStyle = northCellHeight ? { height: `${northCellHeight}px` } : undefined;
 
   return (
     <div className="mb-4">
@@ -581,10 +615,10 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start md:items-stretch">
 
         {/* Board / Dealer / Vul (next to North, top-left) */}
-        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-1 md:row-start-1">
+        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-1 md:row-start-1 md:self-start min-w-0 flex flex-col justify-start" style={matchedTopCellStyle}>
           <div className="flex items-center space-x-3">
             <div className="w-14 h-14 border border-gray-300 rounded bg-gray-50 flex flex-col items-center justify-center">
-              <div className="text-2xl font-bold leading-none">{boardNumber || '-'}</div>
+              <div className="text-2xl font-bold leading-none">{isRotated ? '-' : (boardNumber || '-')}</div>
                           </div>
             <div className="text-sm">
               <div><span className="font-medium">Dealer:</span> {(dealer || 'n').toUpperCase()}</div>
@@ -594,15 +628,15 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
         </div>
 
         {/* North (top, middle) */}
-        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-1 h-full flex">
-          <div className="mt-auto w-full">
+        <div ref={northCellRef} className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-1 md:self-start min-w-0 overflow-visible">
+          <div className="w-full overflow-visible">
             <div className="text-center font-medium mb-1 capitalize">North</div>
             {northHand.map((suitData, index) => (
               <div key={`north-${suitData.suit}`} className="mb-1">
                 <div className="flex items-center mb-1">
-                  <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+                  <span className={`relative z-0 w-7 flex-shrink-0 inline-flex items-center justify-center overflow-visible text-center text-[1.2rem] leading-[1.05] font-bold ${suitData.color}`}>{suitData.suit}</span>
                   {suitData.cardRanks.length > 0 ? (
-                    <div className="flex flex-wrap">
+                    <div className="relative z-10 pl-[1px] flex flex-wrap gap-x-0 gap-y-0 overflow-visible">
                       {suitData.cardRanks.map((rank, idx) => (
                         <button
                           key={`north-${suitData.suitCode}-${rank}-${idx}`}
@@ -616,17 +650,17 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                           onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
                           onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
                           aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
-                          className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                          className={`shrink-0 ${idx === 0 ? 'min-w-[0.92em] pl-[3px] pr-[1px]' : 'min-w-[0.8em] px-[1px]'} h-auto overflow-visible whitespace-nowrap py-0 flex items-center ${idx === 0 ? 'justify-start' : 'justify-center'} text-[1.15rem] leading-[1.15] font-medium rounded-sm
                                     ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                      ? 'bg-gray-100 text-gray-400 border-gray-200'
-                                      : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+                                      ? 'bg-gray-100 text-gray-400'
+                                      : `text-black ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed bg-transparent' : 'hover:bg-blue-100 bg-transparent'}`}`}
                         >
                           {rank === 'T' ? '10' : rank}
                         </button>
                       ))}
                     </div>
                   ) : (
-                    <span className="text-gray-500">—</span>
+                    <span className="inline-flex shrink-0 min-w-[0.92em] pl-[3px] pr-[1px] items-center justify-start text-gray-500">—</span>
                   )}
                 </div>
               </div>
@@ -634,20 +668,20 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
           </div>
         </div>
         {/* Auction (next to North, top-right) */}
-        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-3 md:row-start-1">
-          <AuctionTable structuredAuction={structuredAuction || []} dealer={dealer || 'n'} />
+        <div className="border border-gray-200 rounded-md bg-white p-2 md:col-start-3 md:row-start-1 md:self-start min-w-0 overflow-hidden flex flex-col justify-center" style={matchedTopCellStyle}>
+          <AuctionTable structuredAuction={structuredAuction || []} dealer={dealer || 'n'} visibleRows={3.35} rowHeightPxOverride={29} />
         </div>
 
         {/* West (middle-left) */}
-        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-1 md:row-start-2 -col h-full flex">
-          <div className="my-auto w-full">
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-1 md:row-start-2 -col h-full flex overflow-visible">
+          <div className="my-auto w-full overflow-visible">
           <div className="text-center font-medium mb-1 capitalize">West</div>
           {westHand.map((suitData, index) => (
             <div key={`west-${suitData.suit}`} className="mb-1">
-              <div className="flex items-center mb-1">
-                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+              <div className="flex items-center mb-1 pl-[2px] overflow-visible">
+                <span className={`relative z-0 w-7 flex-shrink-0 inline-flex items-center justify-center overflow-visible text-center text-[1.2rem] leading-[1.05] font-bold ${suitData.color}`}>{suitData.suit}</span>
                 {suitData.cardRanks.length > 0 ? (
-                  <div className="flex flex-wrap">
+                  <div className="relative z-10 pl-[1px] flex flex-wrap gap-x-0 gap-y-0 overflow-visible">
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`west-${suitData.suitCode}-${rank}-${idx}`}
@@ -661,10 +695,10 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                         onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
                         onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
                         aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
-                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                        className={`shrink-0 ${idx === 0 ? 'min-w-[0.92em] pl-[3px] pr-[1px]' : 'min-w-[0.8em] px-[1px]'} h-auto overflow-visible whitespace-nowrap py-0 flex items-center ${idx === 0 ? 'justify-start' : 'justify-center'} text-[1.15rem] leading-[1.15] font-medium rounded-sm
                                   ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
-                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+                                    ? 'bg-gray-100 text-gray-400'
+                                    : `text-black ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed bg-transparent' : 'hover:bg-blue-100 bg-transparent'}`}`}
 
                       >
                         {rank === 'T' ? '10' : rank}
@@ -672,7 +706,7 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                     ))}
                   </div>
                 ) : (
-                  <span className="text-gray-500">—</span>
+                  <span className="inline-flex shrink-0 min-w-[0.92em] pl-[3px] pr-[1px] items-center justify-start text-gray-500">—</span>
                 )}
               </div>
             </div>
@@ -698,8 +732,8 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
             const CardFace = ({ card }) => {
               if (!card) return <div className="w-10 h-14"></div>;
               return (
-                <div className="w-10 h-14 border border-gray-300 rounded-md bg-white shadow-sm flex flex-col items-center justify-center">
-                  <div className={`text-sm font-bold ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
+                <div className="w-10 h-14 border border-gray-300 rounded-md bg-white shadow-sm flex flex-col items-center justify-center gap-[1px]">
+                  <div className={`text-base font-bold leading-none ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
                     {card.rank === 'T' ? '10' : card.rank}
                   </div>
                   <div className={`text-lg leading-none ${card.suit === '♥' || card.suit === '♦' ? 'text-red-600' : 'text-black'}`}>
@@ -732,10 +766,10 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
           <div className="text-center font-medium mb-1 capitalize">East</div>
           {eastHand.map((suitData, index) => (
             <div key={`east-${suitData.suit}`} className="mb-1">
-              <div className="flex items-center mb-1">
-                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+              <div className="flex items-center mb-1 pl-[2px] overflow-visible">
+                <span className={`relative z-0 w-7 flex-shrink-0 inline-flex items-center justify-center overflow-visible text-center text-[1.2rem] leading-[1.05] font-bold ${suitData.color}`}>{suitData.suit}</span>
                 {suitData.cardRanks.length > 0 ? (
-                  <div className="flex flex-wrap">
+                  <div className="relative z-10 pl-[1px] flex flex-wrap gap-x-0 gap-y-0 overflow-visible">
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`east-${suitData.suitCode}-${rank}-${idx}`}
@@ -749,10 +783,10 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                         onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
                         onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
                         aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
-                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                        className={`shrink-0 ${idx === 0 ? 'min-w-[0.92em] pl-[3px] pr-[1px]' : 'min-w-[0.8em] px-[1px]'} h-auto overflow-visible whitespace-nowrap py-0 flex items-center ${idx === 0 ? 'justify-start' : 'justify-center'} text-[1.15rem] leading-[1.15] font-medium rounded-sm
                                   ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
-                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+                                    ? 'bg-gray-100 text-gray-400'
+                                    : `text-black ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed bg-transparent' : 'hover:bg-blue-100 bg-transparent'}`}`}
 
                       >
                         {rank === 'T' ? '10' : rank}
@@ -760,7 +794,7 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                     ))}
                   </div>
                 ) : (
-                  <span className="text-gray-500">—</span>
+                  <span className="inline-flex shrink-0 min-w-[0.92em] pl-[3px] pr-[1px] items-center justify-start text-gray-500">—</span>
                 )}
               </div>
             </div>
@@ -771,9 +805,40 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
         {/* Spacer for bottom-left (keeps South centered on desktop) */}
         
         {/* Bottom-left block with Undo (below West, next to South) */}
-        <div className="border border-gray-200 rounded-md bg-white p-2 flex items-end md:col-start-1 md:row-start-3">
-          
-<div className="flex gap-2 items-center">
+        <div className="border border-gray-200 rounded-md bg-white p-2 flex h-full flex-col items-start md:col-start-1 md:row-start-3">
+          <div className="flex gap-2 items-center">
+            <button
+              type="button"
+              onClick={onRotateClockwise}
+              title="Rotate clockwise"
+              className="px-2 h-8 flex items-center justify-center text-xs font-medium border rounded bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-300"
+            >
+              Rotate ↻
+            </button>
+            <button
+              type="button"
+              onClick={onRotateDeclarerSouth}
+              title="Rotate so declarer is South"
+              className="px-2 h-8 flex items-center justify-center text-xs font-medium border rounded bg-teal-50 text-teal-700 hover:bg-teal-100 border-teal-300"
+            >
+              Declarer ↓ South
+            </button>
+          </div>
+          <div className="mt-auto flex gap-2 items-center">
+            <button
+              onClick={onJumpToFirstTrick}
+              disabled={!canJumpToFirstTrick}
+              title="Go to start"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${canJumpToFirstTrick
+                          ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border-yellow-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 5v14M18 6l-8 6 8 6" />
+              </svg>
+            </button>
+
             <button
               onClick={onUndoTrick}
               disabled={playSequence.every(trick => trick === '')}
@@ -829,19 +894,34 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M4 5l7 7-7 7" />
               </svg>
             </button>
+
+            <button
+              onClick={onJumpToEndTrick}
+              disabled={!canJumpToEndTrick}
+              title="Go to end"
+              className={`w-9 h-8 flex items-center justify-center text-xs font-medium border rounded
+                        ${canJumpToEndTrick
+                          ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 5v14M6 6l8 6-8 6" />
+              </svg>
+            </button>
           </div>
         </div>
 
 
         {/* South (bottom-middle) */}
-        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-3">
+        <div className="border border-gray-200 rounded-md p-2 bg-white md:col-start-2 md:row-start-3 min-w-0 overflow-visible">
+          <div className="w-full overflow-visible">
           <div className="text-center font-medium mb-1 capitalize">South</div>
           {southHand.map((suitData, index) => (
             <div key={`south-${suitData.suit}`} className="mb-1">
-              <div className="flex items-center mb-1">
-                <span className={`w-8 text-center font-bold ${suitData.color}`}>{suitData.suit}</span>
+              <div className="flex items-center mb-1 pl-[2px] overflow-visible">
+                <span className={`relative z-0 w-7 flex-shrink-0 inline-flex items-center justify-center overflow-visible text-center text-[1.2rem] leading-[1.05] font-bold ${suitData.color}`}>{suitData.suit}</span>
                 {suitData.cardRanks.length > 0 ? (
-                  <div className="flex flex-wrap">
+                  <div className="relative z-10 pl-[1px] flex flex-wrap gap-x-0 gap-y-0 overflow-visible">
                     {suitData.cardRanks.map((rank, idx) => (
                       <button
                         key={`south-${suitData.suitCode}-${rank}-${idx}`}
@@ -855,10 +935,10 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                         onDragOver={(e) => onCardDragOver(e, suitData.direction, suitData.suitCode, rank)}
                         onDrop={(e) => onCardDrop(e, suitData.direction, suitData.suitCode, rank)}
                         aria-disabled={isPlayBlocked(suitData.direction, suitData.suitCode, rank)}
-                        className={`w-6 h-6 mr-1 mb-1 flex items-center justify-center text-xs font-medium border rounded
+                        className={`shrink-0 ${idx === 0 ? 'min-w-[0.92em] pl-[3px] pr-[1px]' : 'min-w-[0.8em] px-[1px]'} h-auto overflow-visible whitespace-nowrap py-0 flex items-center ${idx === 0 ? 'justify-start' : 'justify-center'} text-[1.15rem] leading-[1.15] font-medium rounded-sm
                                   ${isCardPlayed(suitData.suitCode, rank === 'T' ? 't' : rank.toLowerCase())
-                                    ? 'bg-gray-100 text-gray-400 border-gray-200'
-                                    : `border-gray-300 ${suitData.color} ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed' : 'hover:bg-blue-100'}`}`}
+                                    ? 'bg-gray-100 text-gray-400'
+                                    : `text-black ${isPlayBlocked(suitData.direction, suitData.suitCode, rank) ? 'cursor-not-allowed bg-transparent' : 'hover:bg-blue-100 bg-transparent'}`}`}
 
                       >
                         {rank === 'T' ? '10' : rank}
@@ -866,11 +946,12 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
                     ))}
                   </div>
                 ) : (
-                  <span className="text-gray-500">—</span>
+                  <span className="inline-flex shrink-0 min-w-[0.92em] pl-[3px] pr-[1px] items-center justify-start text-gray-500">—</span>
                 )}
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         {/* Contract + trick count (below East, next to South) */}
@@ -903,10 +984,18 @@ const BridgeDiagram = ({ hands, setHands, playSequence, setPlaySequence, onUndoL
 };
 
 // Auction Table Component
-const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnnotation }) => {
+const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnnotation, visibleRows = 4, compact = false, fillAvailableHeight = false, rowHeightPxOverride = null }) => {
   const [activeAlert, setActiveAlert] = React.useState(null);
   const alertDragRef = React.useRef(null);
+  const frameRef = React.useRef(null);
+  const headerRef = React.useRef(null);
+  const bodyRef = React.useRef(null);
+  const [columnLayout, setColumnLayout] = React.useState({ tableWidth: null, colWidths: null });
+  const [snappedBodyHeightPx, setSnappedBodyHeightPx] = React.useState(null);
   const [isDraggingAlertPopup, setIsDraggingAlertPopup] = React.useState(false);
+  const rowHeightPx = rowHeightPxOverride ?? (compact ? 24 : 34);
+  const rowPaddingClass = compact ? 'py-[2px] text-sm' : (rowHeightPx < 34 ? 'py-[2px]' : 'py-1');
+  const bodyHeightPx = Math.max(rowHeightPx, rowHeightPx * Math.max(1, visibleRows)) + 1;
   // activeAlert: { text?: string, x: number, y: number, index?: number, editing?: boolean, tab?: 'alert' | 'note', alertText?: string, noteText?: string }
   React.useEffect(() => {
     if (!activeAlert) return;
@@ -950,6 +1039,84 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
     };
   }, [isDraggingAlertPopup]);
 
+  React.useLayoutEffect(() => {
+    const frame = frameRef.current;
+    const header = headerRef.current;
+    const body = bodyRef.current;
+    if (!frame || !body) return;
+
+    let rafId = 0;
+    const syncAuctionFrame = () => {
+      if (fillAvailableHeight && header) {
+        const availableBodyHeight = Math.max(0, frame.clientHeight - header.offsetHeight);
+        const fittedRows = Math.max(1, Math.floor(Math.max(0, availableBodyHeight - 1) / rowHeightPx));
+        const nextSnappedBodyHeight = (fittedRows * rowHeightPx) + 1;
+        setSnappedBodyHeightPx((prev) => prev === nextSnappedBodyHeight ? prev : nextSnappedBodyHeight);
+      } else {
+        setSnappedBodyHeightPx((prev) => prev === null ? prev : null);
+      }
+
+      const needsScroll = body.scrollHeight > body.clientHeight + 1;
+      const scrollbarWidth = needsScroll ? Math.max(0, body.offsetWidth - body.clientWidth) : 0;
+      frame.style.setProperty('--auction-scrollbar-width', `${scrollbarWidth}px`);
+
+      const contentWidth = Math.max(0, body.clientWidth);
+      const visibleTableWidth = Math.max(0, contentWidth - 1);
+      const baseWidth = Math.floor(visibleTableWidth / 4);
+      const remainder = visibleTableWidth - (baseWidth * 4);
+      const colWidths = Array.from({ length: 4 }, (_, index) => baseWidth + (index < remainder ? 1 : 0));
+
+      setColumnLayout((prev) => {
+        const sameWidth = prev.tableWidth === visibleTableWidth;
+        const sameCols = Array.isArray(prev.colWidths)
+          && prev.colWidths.length === colWidths.length
+          && prev.colWidths.every((value, index) => value === colWidths[index]);
+        return sameWidth && sameCols ? prev : { tableWidth: visibleTableWidth, colWidths };
+      });
+    };
+    const scheduleSync = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(syncAuctionFrame);
+    };
+
+    scheduleSync();
+    window.addEventListener('resize', scheduleSync);
+
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => scheduleSync());
+      resizeObserver.observe(body);
+      resizeObserver.observe(frame);
+      if (header) resizeObserver.observe(header);
+    }
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', scheduleSync);
+      if (resizeObserver) resizeObserver.disconnect();
+    };
+  }, [structuredAuction, dealer, fillAvailableHeight, rowHeightPx]);
+
+  React.useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+
+    const handleWheel = (event) => {
+      const canScroll = body.scrollHeight > body.clientHeight + 1;
+      if (!canScroll) return;
+      const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? body.clientHeight : 1;
+      const deltaY = event.deltaY * factor;
+      if (!deltaY) return;
+      const maxScroll = Math.max(0, body.scrollHeight - body.clientHeight);
+      const current = body.scrollTop;
+      const next = Math.min(maxScroll, Math.max(0, current + deltaY));
+      event.preventDefault();
+      if (next !== current) body.scrollTop = next;
+    };
+
+    body.addEventListener('wheel', handleWheel, { passive: false });
+    return () => body.removeEventListener('wheel', handleWheel);
+  }, [structuredAuction, dealer]);
 
   const startDragAlertPopup = (e) => {
     if (!activeAlert || !activeAlert.editing) return;
@@ -964,42 +1131,35 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
     setIsDraggingAlertPopup(true);
   };
 
-  // Format the auction into rows
   const formatAuctionRows = () => {
     const positions = ['w', 'n', 'e', 's'];
     const dealerIndex = positions.indexOf(dealer.toLowerCase());
-    
-    // Start with empty rows and first row with empty cells before dealer
+
     let rows = [Array(4).fill('')];
     let currentRow = 0;
     let currentPos = 0;
-    
-    // Fill empty cells before dealer
+
     for (let i = 0; i < dealerIndex; i++) {
       rows[currentRow][i] = '-';
       currentPos++;
     }
-    
-    // Fill in bids
+
     structuredAuction.forEach((bidInfo, bidIndex) => {
       const { bid, alert, annotation } = bidInfo;
-      
-      // Format the bid nicely
-      // Format the bid nicely
+
       let displayBid;
       if (bid === 'p') displayBid = 'Pass';
-      else if (bid === 'd') displayBid = 'X';  // Changed from Dbl to X
-      else if (bid === 'r') displayBid = 'XX'; // Changed from Rdbl to XX
+      else if (bid === 'd') displayBid = 'X';
+      else if (bid === 'r') displayBid = 'XX';
       else {
         const level = bid[0];
         const strain = bid[1];
-        const strainSymbol = 
-          strain === 'c' ? '♣' : 
-          strain === 'd' ? '♦' : 
-          strain === 'h' ? '♥' : 
+        const strainSymbol =
+          strain === 'c' ? '♣' :
+          strain === 'd' ? '♦' :
+          strain === 'h' ? '♥' :
           strain === 's' ? '♠' : 'NT';
-        
-        // Create JSX with different colors for strain symbols
+
         if (strain === 'd' || strain === 'h') {
           displayBid = (
             <span>
@@ -1011,10 +1171,7 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
           displayBid = `${level}${strainSymbol}`;
         }
       }
-      
-      
-      // Click a bid to add/edit its alert or note (when enabled in the bidding box).
-      // Outside the bidding box, alerted bids still show their alert text when clicked.
+
       const canOpenEditor = !!onEditBidAlert || !!onEditBidAnnotation;
       if (canOpenEditor || alert) {
         const bidTextClass = bid === 'p'
@@ -1057,56 +1214,101 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
       }
 
       rows[currentRow][currentPos] = displayBid;
-      
-      // Move to next position
       currentPos = (currentPos + 1) % 4;
-      
-      // If we wrapped around, create a new row *only if there are more bids to come*
+
       if (currentPos === 0 && bidIndex < structuredAuction.length - 1) {
         rows.push(Array(4).fill(''));
         currentRow++;
       }
     });
-    
+
     return rows;
   };
-  
+
   const auctionRows = formatAuctionRows();
-  
-  // Make sure we always display at least one row even if no bids yet
   const rowsToDisplay = auctionRows.length > 0 ? auctionRows : [Array(4).fill('')];
-  
+  const resolvedBodyHeightPx = fillAvailableHeight ? (snappedBodyHeightPx || bodyHeightPx) : bodyHeightPx;
+  const bodyHeightStyle = fillAvailableHeight
+    ? { height: `${resolvedBodyHeightPx}px`, maxHeight: `${resolvedBodyHeightPx}px`, flex: '0 0 auto' }
+    : { height: `${bodyHeightPx}px`, maxHeight: `${bodyHeightPx}px` };
+  const colWidths = Array.isArray(columnLayout.colWidths) && columnLayout.colWidths.length === 4
+    ? columnLayout.colWidths
+    : null;
+  const tableWidthStyle = columnLayout.tableWidth ? { width: `${columnLayout.tableWidth}px` } : { width: '100%' };
+
+  const renderCell = (cell, rowIndex, cellIndex) => {
+    const isFirstBodyRow = rowIndex === 0;
+    return (
+      <td
+        key={`cell-${rowIndex}-${cellIndex}`}
+        className={`px-1 ${rowPaddingClass} text-center align-middle border-x border-b ${isFirstBodyRow ? 'border-t-0' : 'border-t'} ${
+          cell === 'Pass' ? 'text-gray-500' :
+          cell === 'X' ? 'text-red-600 font-medium' :
+          cell === 'XX' ? 'text-blue-600 font-medium' :
+          'text-black'
+        }`}
+        style={{ height: `${rowHeightPx}px` }}
+      >
+        {cell}
+      </td>
+    );
+  };
+
   return (
-    <div className="relative">
-      <table className="w-full border-collapse table-fixed">
-      <thead>
-        <tr>
-          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">West</th>
-          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">North</th>
-          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">East</th>
-          <th className="w-1/4 px-1 py-1 border bg-gray-100 text-center font-medium">South</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rowsToDisplay.map((row, rowIndex) => (
-          <tr key={`row-${rowIndex}`}>
-            {row.map((cell, cellIndex) => (
-                              <td 
-                key={`cell-${rowIndex}-${cellIndex}`} 
-                className={`px-1 py-1 border text-center ${
-                  cell === 'Pass' ? 'text-gray-500' : 
-                  cell === 'X' ? 'text-red-600 font-medium' : 
-                  cell === 'XX' ? 'text-blue-600 font-medium' : 
-                  'text-black' // Default to black for all other cells
-                }`}
-              >
-                {cell}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div ref={frameRef} className={`relative bg-white w-full min-w-0 max-w-full overflow-hidden box-border ${fillAvailableHeight ? 'h-full flex flex-col' : ''}`} style={{ '--auction-scrollbar-width': '0px' }}>
+      <div ref={headerRef} className="bg-gray-100 w-full min-w-0 max-w-full box-border border-r border-gray-300" style={{ paddingRight: 'var(--auction-scrollbar-width)' }}>
+        <table className="border-collapse table-fixed bg-gray-100 border-r border-gray-300" style={tableWidthStyle}>
+          <colgroup>
+            {colWidths ? colWidths.map((width, index) => <col key={`head-col-${index}`} style={{ width: `${width}px` }} />) : (
+              <>
+                <col />
+                <col />
+                <col />
+                <col />
+              </>
+            )}
+          </colgroup>
+          <thead>
+            <tr>
+              <th className={`px-1 ${rowPaddingClass} border bg-gray-100 text-center font-medium align-middle`} style={{ height: `${rowHeightPx}px` }}>West</th>
+              <th className={`px-1 ${rowPaddingClass} border bg-gray-100 text-center font-medium align-middle`} style={{ height: `${rowHeightPx}px` }}>North</th>
+              <th className={`px-1 ${rowPaddingClass} border bg-gray-100 text-center font-medium align-middle`} style={{ height: `${rowHeightPx}px` }}>East</th>
+              <th className={`px-1 ${rowPaddingClass} border bg-gray-100 text-center font-medium align-middle`} style={{ height: `${rowHeightPx}px` }}>South</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+
+      <div
+        ref={bodyRef}
+        data-auction-scroll
+        className={`w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain bg-white box-border ${fillAvailableHeight ? '' : ''}`}
+        style={bodyHeightStyle}
+      >
+        <div className="bg-white w-full min-w-0 max-w-full border-r border-gray-300 box-border">
+          <table className="border-collapse table-fixed bg-white border-r border-gray-300" style={tableWidthStyle}>
+            <colgroup>
+              {colWidths ? colWidths.map((width, index) => <col key={`body-col-${index}`} style={{ width: `${width}px` }} />) : (
+                <>
+                  <col />
+                  <col />
+                  <col />
+                  <col />
+                </>
+              )}
+            </colgroup>
+            <tbody>
+              {rowsToDisplay.map((row, rowIndex) => (
+                <tr key={`row-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => renderCell(cell, rowIndex, cellIndex))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="h-[2px]" aria-hidden="true"></div>
+        </div>
+      </div>
+
       {activeAlert && (
         <div
           className={`fixed z-50 inline-block ${activeAlert.editing ? 'min-w-[220px] w-72 max-w-[calc(100vw-24px)] max-h-[calc(100vh-24px)] bg-white border border-gray-300 resize overflow-auto flex flex-col' : 'max-w-xs bg-yellow-50 border border-yellow-300'} rounded-md shadow px-2 py-2 text-xs text-gray-900`}
@@ -1115,7 +1317,6 @@ const AuctionTable = ({ structuredAuction, dealer, onEditBidAlert, onEditBidAnno
         >
           {activeAlert.editing && typeof activeAlert.index === 'number' ? (
             <>
-
               <div className="h-2 -mt-1 mb-2 cursor-move" onMouseDown={startDragAlertPopup} />
               <div className="flex mb-2 overflow-hidden rounded border border-gray-200">
                 <button
@@ -1414,6 +1615,7 @@ const BridgeHandviewerApp = () => {
   const [dealer, setDealer] = useState('n');
   const [vulnerability, setVulnerability] = useState('-');
   const [boardNumber, setBoardNumber] = useState('');
+  const [rotationSteps, setRotationSteps] = useState(0);
 
   const vulFromBoardNumber = (bn) => {
     const n = parseInt(String(bn || '').trim(), 10);
@@ -1468,6 +1670,7 @@ const BridgeHandviewerApp = () => {
   const [cardAnnotation, setCardAnnotation] = useState(''); // New state for card annotation
   const [playSequence, setPlaySequence] = useState(Array(13).fill(''));
   const [playRedoStack, setPlayRedoStack] = useState([]);
+  const [bridgeDiagramShowFromStart, setBridgeDiagramShowFromStart] = useState(false);
   const [claimedTricks, setClaimedTricks] = useState('');
   const [generatedUrl, setGeneratedUrl] = useState('');
   const [remainingUrl, setRemainingUrl] = useState('');
@@ -1479,6 +1682,163 @@ const [error, setError] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [importFileName, setImportFileName] = useState('');
   const [showImport, setShowImport] = useState(false);
+
+  const AUTOSAVE_STORAGE_KEY = 'bbo-handviewer-link-generator-autosave-v2';
+  const autosaveRestoredRef = React.useRef(false);
+  const autosaveSnapshotRef = React.useRef(null);
+  const skipNextBoardDealerSyncRef = React.useRef(false);
+  const skipNextBoardVulnerabilitySyncRef = React.useRef(false);
+
+  const buildAutosaveSnapshot = () => ({
+    hands,
+    names,
+    dealer,
+    vulnerability,
+    boardNumber,
+    rotationSteps,
+    kibitzer,
+    showAdvanced,
+    auction,
+    structuredAuction,
+    bidRedoStack,
+    showBiddingBox,
+    showBridgeDiagram,
+    showAnnotations,
+    showPlayRecord,
+    showPlayGrid,
+    playSequence,
+    playRedoStack,
+    bridgeDiagramShowFromStart,
+    claimedTricks
+  });
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!saved || typeof saved !== 'object') return;
+
+      const savedBoardNumber = typeof saved.boardNumber === 'string' ? saved.boardNumber : '';
+      if (savedBoardNumber) {
+        const derivedDealer = dealerFromBoardNumber(savedBoardNumber);
+        const derivedVulnerability = vulFromBoardNumber(savedBoardNumber);
+        if (typeof saved.dealer === 'string' && saved.dealer && saved.dealer !== derivedDealer) {
+          skipNextBoardDealerSyncRef.current = true;
+        }
+        if (typeof saved.vulnerability === 'string' && saved.vulnerability && saved.vulnerability !== derivedVulnerability) {
+          skipNextBoardVulnerabilitySyncRef.current = true;
+        }
+      }
+
+      if (saved.hands) setHands(saved.hands);
+      if (saved.names) setNames(saved.names);
+      if (typeof saved.dealer === 'string') setDealer(saved.dealer);
+      if (typeof saved.vulnerability === 'string') setVulnerability(saved.vulnerability);
+      const restoredRotationSteps = typeof saved.rotationSteps === 'number' ? (((saved.rotationSteps % 4) + 4) % 4) : 0;
+      if (typeof saved.boardNumber === 'string') setBoardNumber(restoredRotationSteps !== 0 ? '' : saved.boardNumber);
+      if (typeof saved.rotationSteps === 'number') setRotationSteps(restoredRotationSteps);
+      if (typeof saved.kibitzer === 'string') setKibitzer(saved.kibitzer);
+      if (typeof saved.showAdvanced === 'boolean') setShowAdvanced(saved.showAdvanced);
+      if (typeof saved.auction === 'string') setAuction(saved.auction);
+      if (Array.isArray(saved.structuredAuction)) setStructuredAuction(saved.structuredAuction);
+      if (Array.isArray(saved.bidRedoStack)) setBidRedoStack(saved.bidRedoStack);
+      if (typeof saved.showBiddingBox === 'boolean') setShowBiddingBox(saved.showBiddingBox);
+      if (typeof saved.showBridgeDiagram === 'boolean') setShowBridgeDiagram(saved.showBridgeDiagram);
+      if (typeof saved.showAnnotations === 'boolean') setShowAnnotations(saved.showAnnotations);
+      if (typeof saved.showPlayRecord === 'boolean') setShowPlayRecord(saved.showPlayRecord);
+      if (typeof saved.showPlayGrid === 'boolean') setShowPlayGrid(saved.showPlayGrid);
+      if (Array.isArray(saved.playSequence)) setPlaySequence(saved.playSequence);
+      if (Array.isArray(saved.playRedoStack)) setPlayRedoStack(saved.playRedoStack);
+      if (typeof saved.bridgeDiagramShowFromStart === 'boolean') setBridgeDiagramShowFromStart(saved.bridgeDiagramShowFromStart);
+      if (typeof saved.claimedTricks === 'string') setClaimedTricks(saved.claimedTricks);
+      autosaveSnapshotRef.current = saved;
+    } catch (e) {
+      console.warn('Auto-restore failed', e);
+    } finally {
+      autosaveRestoredRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!autosaveRestoredRef.current) return;
+    const snapshot = buildAutosaveSnapshot();
+    autosaveSnapshotRef.current = snapshot;
+    try {
+      window.localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('Auto-save failed', e);
+    }
+  }, [
+    hands,
+    names,
+    dealer,
+    vulnerability,
+    boardNumber,
+    rotationSteps,
+    kibitzer,
+    showAdvanced,
+    auction,
+    structuredAuction,
+    bidRedoStack,
+    showBiddingBox,
+    showBridgeDiagram,
+    showAnnotations,
+    showPlayRecord,
+    showPlayGrid,
+    playSequence,
+    playRedoStack,
+    bridgeDiagramShowFromStart,
+    claimedTricks
+  ]);
+
+  useEffect(() => {
+    if (!autosaveRestoredRef.current) return;
+
+    const persistLatestSnapshot = () => {
+      try {
+        const snapshot = autosaveSnapshotRef.current || buildAutosaveSnapshot();
+        window.localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(snapshot));
+      } catch (e) {
+        console.warn('Auto-save on page hide failed', e);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') persistLatestSnapshot();
+    };
+
+    window.addEventListener('pagehide', persistLatestSnapshot);
+    window.addEventListener('beforeunload', persistLatestSnapshot);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pagehide', persistLatestSnapshot);
+      window.removeEventListener('beforeunload', persistLatestSnapshot);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    hands,
+    names,
+    dealer,
+    vulnerability,
+    boardNumber,
+    rotationSteps,
+    kibitzer,
+    showAdvanced,
+    auction,
+    structuredAuction,
+    bidRedoStack,
+    showBiddingBox,
+    showBridgeDiagram,
+    showAnnotations,
+    showPlayRecord,
+    showPlayGrid,
+    playSequence,
+    playRedoStack,
+    bridgeDiagramShowFromStart,
+    claimedTricks
+  ]);
 
   useEffect(() => {
     if (!activePlayGridPopup) return;
@@ -1524,11 +1884,19 @@ const [error, setError] = useState('');
 
 
   useEffect(() => {
+    if (skipNextBoardVulnerabilitySyncRef.current) {
+      skipNextBoardVulnerabilitySyncRef.current = false;
+      return;
+    }
     const v = vulFromBoardNumber(boardNumber);
     if (v) setVulnerability(v);
   }, [boardNumber]);
 
   useEffect(() => {
+    if (skipNextBoardDealerSyncRef.current) {
+      skipNextBoardDealerSyncRef.current = false;
+      return;
+    }
     const d = dealerFromBoardNumber(boardNumber);
     if (d) setDealer(d);
   }, [boardNumber]);
@@ -1707,6 +2075,16 @@ const [error, setError] = useState('');
         }
 
       }
+
+      // Some IntoBridge LIN exports include mc|n| even when all 52 cards were played.
+      // In that case mc is not a real claim and should be ignored.
+      const playedCardCount = (result.playSequence || []).reduce((total, trick) => {
+        return total + extractCardCodes(trick || '').length;
+      }, 0);
+      if (playedCardCount >= 52) {
+        result.claimedTricks = '';
+      }
+
       return result;
     } catch (err) {
       throw new Error(`Failed to parse LIN format: ${err.message}`);
@@ -2108,8 +2486,12 @@ return result;
       setDealer(parsed.dealer);
       setVulnerability(parsed.vulnerability);
       setBoardNumber(parsed.boardNumber);
+      setRotationSteps(0);
       setAuction(parsed.auction);
-      setPlaySequence(parsed.playSequence);
+      const importedPlayState = buildImportedPlayStartState(parsed.playSequence);
+      setPlaySequence(importedPlayState.playSequence);
+      setPlayRedoStack(importedPlayState.redoStack);
+      setBridgeDiagramShowFromStart(false);
       setClaimedTricks(parsed.claimedTricks || '');
       
       // Parse auction into structured format
@@ -2180,9 +2562,13 @@ return result;
         setDealer(parsed.dealer);
         setVulnerability(parsed.vulnerability);
         setBoardNumber(parsed.boardNumber);
+        setRotationSteps(0);
         setAuction(parsed.auction);
-        setPlaySequence(parsed.playSequence);
-        setClaimedTricks(parsed.claimedTricks || '');
+      const importedPlayState = buildImportedPlayStartState(parsed.playSequence);
+      setPlaySequence(importedPlayState.playSequence);
+      setPlayRedoStack(importedPlayState.redoStack);
+      setBridgeDiagramShowFromStart(false);
+      setClaimedTricks(parsed.claimedTricks || '');
 
         // Parse auction into structured format
         if (parsed.auction) {
@@ -2551,8 +2937,8 @@ return result;
 
         if (kibitzOn) params.push(`k=${String(kibitzer).trim().toLowerCase()}`);
 
-        const auctionNoAnn = String(auction || '').replace(/\{[^}]*\}/g, '');
-        if (auctionNoAnn) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auctionNoAnn))}`);
+        const auctionWithAnn = String(auction || '');
+        if (auctionWithAnn) params.push(`a=${encodeForHandviewer(normalizeInnerEncoding(auctionWithAnn))}`);
         const fullPlaySequence = (playSequence || []).join('');
         if (fullPlaySequence) params.push(`p=${encodeForHandviewer(normalizeInnerEncoding(fullPlaySequence))}`);
         // Claim (c=). Note: Handviewer will show all 4 hands if a claim is made before all 52 cards are played.
@@ -2836,6 +3222,60 @@ return result;
     setAuction(compactAuction);
     setAlertMessage('');
     setBidAnnotation('');
+  };
+
+const trickCardsToSegments = (trickStr) => {
+    const cards = parseTrickCardsWithAnnotations(trickStr || '');
+    return cards.map((c) => {
+      const cc = `${c.suitCode}${c.rankCode}`;
+      return c.rawAnn ? `${cc}{${c.rawAnn}}` : cc;
+    });
+  };
+
+  const buildImportedPlayStartState = (sequence) => {
+    const source = Array.isArray(sequence) ? [...sequence] : Array(13).fill('');
+    return { playSequence: source, redoStack: [] };
+  };
+
+  const handleJumpToFirstTrick = () => {
+    const hasAnyCards = playSequence.some(trick => extractCardCodes(trick || '').length > 0);
+    if (!hasAnyCards) return;
+
+    const newPlaySequence = Array(13).fill('');
+    const batchActions = [];
+
+    for (let t = playSequence.length - 1; t >= 0; t--) {
+      const segments = trickCardsToSegments(playSequence[t]);
+      if (segments.length > 0) {
+        batchActions.push(...segments.slice().reverse().map(seg => ({ trickIndex: t, removed: seg })));
+      }
+    }
+
+    setPlaySequence(newPlaySequence);
+    setPlayRedoStack(prev => [...prev, ...batchActions]);
+    setBridgeDiagramShowFromStart(false);
+  };
+
+  const handleJumpToEndTrick = () => {
+    if (playRedoStack.length === 0) return;
+
+    const newStack = [...playRedoStack];
+    const newPlaySequence = [...playSequence];
+
+    while (newStack.length > 0) {
+      const top = newStack[newStack.length - 1];
+      if (!top) break;
+      const t = top.trickIndex;
+      const toRedo = [];
+      while (newStack.length > 0 && newStack[newStack.length - 1].trickIndex === t) {
+        toRedo.push(newStack.pop());
+      }
+      newPlaySequence[t] = (newPlaySequence[t] || '') + toRedo.map(a => a.removed || '').join('');
+    }
+
+    setPlaySequence(newPlaySequence);
+    setPlayRedoStack(newStack);
+    setBridgeDiagramShowFromStart(false);
   };
 
 // Handle undoing the last card played
@@ -3921,6 +4361,94 @@ return result;
     return { ns, ew };
   };
 
+  const rotateDirShortClockwise = (dir) => {
+    const d = (dir || '').toLowerCase();
+    if (d === 'n') return 'e';
+    if (d === 'e') return 's';
+    if (d === 's') return 'w';
+    if (d === 'w') return 'n';
+    return d;
+  };
+
+  const rotateObjectClockwise = (obj) => ({
+    north: obj?.west || obj?.north || '',
+    east: obj?.north || obj?.east || '',
+    south: obj?.east || obj?.south || '',
+    west: obj?.south || obj?.west || ''
+  });
+
+  const rotateVulnerabilityClockwise = (v) => {
+    const x = (v || '').toString().toLowerCase();
+    if (x === 'n' || x === 'ns') return 'e';
+    if (x === 'e' || x === 'ew') return 'n';
+    return x || '-';
+  };
+
+  const applyClockwiseRotation = (stepsRaw = 1) => {
+    const steps = ((stepsRaw % 4) + 4) % 4;
+    if (steps === 0) return;
+
+    let nextHands = hands;
+    let nextNames = names;
+    let nextDealer = dealer;
+    let nextVulnerability = vulnerability;
+    let nextStructuredAuction = structuredAuction;
+
+    for (let i = 0; i < steps; i++) {
+      nextHands = rotateObjectClockwise(nextHands);
+      nextNames = rotateObjectClockwise(nextNames);
+      nextDealer = rotateDirShortClockwise(nextDealer);
+      nextVulnerability = rotateVulnerabilityClockwise(nextVulnerability);
+      nextStructuredAuction = (nextStructuredAuction || []).map(item => ({
+        ...item,
+        direction: rotateDirShortClockwise(item.direction)
+      }));
+    }
+
+    const nextAuction = buildCompactAuction(nextStructuredAuction);
+    const nextRotationSteps = (rotationSteps + steps) % 4;
+
+    setHands(nextHands);
+    setNames(nextNames);
+    setDealer(nextDealer);
+    setVulnerability(nextVulnerability);
+    setBoardNumber('');
+    setStructuredAuction(nextStructuredAuction);
+    setAuction(nextAuction);
+    setRotationSteps(nextRotationSteps);
+
+    if (autosaveRestoredRef.current) {
+      const snapshot = {
+        ...buildAutosaveSnapshot(),
+        hands: nextHands,
+        names: nextNames,
+        dealer: nextDealer,
+        vulnerability: nextVulnerability,
+        boardNumber: '',
+        structuredAuction: nextStructuredAuction,
+        auction: nextAuction,
+        rotationSteps: nextRotationSteps
+      };
+      autosaveSnapshotRef.current = snapshot;
+      try {
+        window.localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(snapshot));
+      } catch (e) {
+        console.warn('Auto-save during rotation failed', e);
+      }
+    }
+  };
+
+  const handleRotateClockwise = () => {
+    applyClockwiseRotation(1);
+  };
+
+  const handleRotateDeclarerSouth = () => {
+    const info = getContractInfo(structuredAuction);
+    if (!info || !info.declarer) return;
+    const targetSteps = { north: 2, east: 1, south: 0, west: 3 };
+    applyClockwiseRotation(targetSteps[info.declarer] || 0);
+  };
+
   const contractInfo = getContractInfo(structuredAuction);
   const contractDisplay = getContractDisplay(structuredAuction);
   const trickCounts = computeTrickCounts(playSequence, contractInfo);
@@ -3929,6 +4457,21 @@ return result;
   const currentTrickLeader = turnState.leader;
   const displayTrickLeader = turnState.displayLeader;
   const displayTrickIndex = turnState.displayIndex;
+  const firstNonEmptyTrickIndex = playSequence.findIndex(trick => extractCardCodes(trick || '').length > 0);
+  const trickLeadersAtStart = computeTrickLeadersAtStart(playSequence, contractInfo);
+  const bridgeDiagramDisplayIndex = (bridgeDiagramShowFromStart && firstNonEmptyTrickIndex >= 0) ? firstNonEmptyTrickIndex : displayTrickIndex;
+  const bridgeDiagramDisplayLeader = (bridgeDiagramShowFromStart && firstNonEmptyTrickIndex >= 0)
+    ? (trickLeadersAtStart[firstNonEmptyTrickIndex] || displayTrickLeader)
+    : displayTrickLeader;
+  let lastNonEmptyTrickIndex = -1;
+  for (let i = playSequence.length - 1; i >= 0; i--) {
+    if (extractCardCodes(playSequence[i] || '').length > 0) {
+      lastNonEmptyTrickIndex = i;
+      break;
+    }
+  }
+  const canJumpToFirstTrick = playSequence.some(trick => extractCardCodes(trick || '').length > 0);
+  const canJumpToEndTrick = playRedoStack.length > 0;
   const annotatedPlays = computeAnnotatedPlays(playSequence, contractInfo);
 
   const playGridRows = Array.from({ length: 13 }).map((_, trickIndex) => {
@@ -4273,9 +4816,9 @@ return (
                 {showBiddingBox && (
                   <div className="mt-3 p-3 border border-gray-200 rounded-md">
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', gridGap: '1rem' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gridGap: '1rem' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gridGap: '1rem' }}>
                         {/* Bidding box in left column */}
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                                                     <BiddingBox
                             onBidSelected={handleBidSelected}
                             currentAuction={structuredAuction}
@@ -4291,7 +4834,7 @@ return (
 </div>
                         
                         {/* Auction table in right column */}
-                        <div>
+                        <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
                                                     <AuctionTable
                             structuredAuction={structuredAuction}
                             dealer={dealer}
@@ -4417,15 +4960,22 @@ return (
                     cardAnnotation={cardAnnotation}
                     setCardAnnotation={setCardAnnotation}
                   currentToAct={currentToAct}
-                            displayTrickLeader={displayTrickLeader}
-                            displayTrickIndex={displayTrickIndex}
+                            displayTrickLeader={bridgeDiagramDisplayLeader}
+                            displayTrickIndex={bridgeDiagramDisplayIndex}
                     boardNumber={boardNumber}
+                    isRotated={rotationSteps !== 0}
                     dealer={dealer}
                     vulnerability={vulnerability}
                     structuredAuction={structuredAuction}
                     contractDisplay={contractDisplay}
                     nsTricks={trickCounts.ns}
                     ewTricks={trickCounts.ew}
+                    onJumpToFirstTrick={handleJumpToFirstTrick}
+                    canJumpToFirstTrick={canJumpToFirstTrick}
+                    onJumpToEndTrick={handleJumpToEndTrick}
+                    canJumpToEndTrick={canJumpToEndTrick}
+                    onRotateClockwise={handleRotateClockwise}
+                    onRotateDeclarerSouth={handleRotateDeclarerSouth}
                           />
 
                   {/* Play sequence grid for click-to-annotate */}
@@ -4450,7 +5000,7 @@ return (
 
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setPlaySequence(Array(13).fill('')); }}
+                        onClick={(e) => { e.stopPropagation(); setPlaySequence(Array(13).fill('')); setPlayRedoStack([]); setBridgeDiagramShowFromStart(false); }}
                         className="text-gray-500 hover:text-red-600"
                         title="Clear all play record"
                       >
